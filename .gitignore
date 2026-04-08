@@ -1,0 +1,10 @@
+build/
+cmake-build-*/
+.cmake/
+CMakeFiles/
+CMakeCache.txt
+*.a
+*.so
+*.o
+compile_commands.json
+.cache/
