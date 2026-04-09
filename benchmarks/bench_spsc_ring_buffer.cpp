@@ -157,7 +157,7 @@ BENCHMARK(BM_Mutex_ProducerConsumer)
 // 前面测试用 int64_t（8字节），这里改用 Order（64字节，一个 cache line）
 // 模拟真实的撮合引擎负载，测量更接近实际的吞吐量。
 static void BM_SPSC_Order_ProducerConsumer(benchmark::State& state) {
-    constexpr size_t kCapacity = 16384;
+    constexpr size_t kCapacity = 16384; //16K
     SPSCRingBuffer<Order, kCapacity> buf;
 
     const int64_t N = state.range(0);
