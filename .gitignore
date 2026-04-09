@@ -8,3 +8,7 @@ CMakeCache.txt
 *.o
 compile_commands.json
 .cache/
+
+# Benchmark results and learning notes (local only, not version-controlled)
+results/
+learning_notes/
