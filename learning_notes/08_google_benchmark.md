@@ -245,26 +245,41 @@ for (auto _ : state) {
     benchmark::DoNotOptimize(trades);
 }
 
-// 正确：把构造放到 PauseTiming 里，或预先生成订单列表
+// 正确：预先生成订单列表，循环内直接取引用
+std::vector<Order> orders(kBatchSize);
+for (int i = 0; i < kBatchSize; ++i) orders[i] = make_order(...);
+
+for (auto _ : state) {
+    auto trades = book.add_order(&orders[idx % kBatchSize]);
+    benchmark::DoNotOptimize(trades);
+    ++idx;
+}
 ```
+
+**本项目的修复**：`BM_AddOrder_NoMatch` 和 `BM_AddOrder_FullMatch` 均已采用预生成订单列表的方式，消除循环内构造开销。
 
 ### 陷阱 3：每次迭代共享同一个 OrderBook 状态
 
 ```cpp
 // 问题：第 1000 次迭代的 OrderBook 里有 999 个挂单，
-//       测的不是"空 OrderBook 的插入"，而是"满 OrderBook 的插入"
+//       测的不是"固定深度的插入"，而是"深度随迭代线性增长"
 static void BM_AddOrder_NoMatch(benchmark::State& state) {
-    OrderBook book("BTCUSD");  // ← 所有迭代共享这一个
+    OrderBook book("BTCUSD");  // ← 所有迭代共享，深度越来越大
     uint64_t id = 1;
     for (auto _ : state) {
         Order o = make_order(id++, Side::BUY, 99'000'000, 1);
-        auto trades = book.add_order(&o);  // 深度越来越大！
+        auto trades = book.add_order(&o);
         benchmark::DoNotOptimize(trades);
     }
 }
 ```
 
-在 `BM_AddOrder_NoMatch` 里这实际上是**刻意设计**的——卖价始终 > 买价（卖从 101 开始，买单挂在 99），所以挂单量会增长，但因为买卖价格不重叠，map 里 `lower_bound` 的查找复杂度随深度增长。如果你想测"固定深度下的插入"，需要在 `PauseTiming` 里重建 OrderBook。
+**说明**：这个问题比"完全错误"更微妙。"共享状态模拟现实中有挂单量"的逻辑是成立的，但问题在于：
+
+- 深度从 0 增长到 `iterations` 的过程中，`std::map::lower_bound` 的 `O(log N)` 开销从接近 O(1) 增长到 `O(log iterations)`
+- 最终报告的"平均值"是从快到慢的混合值，**既不代表空盘口，也不代表稳态盘口**，测量目标是模糊的
+
+**本项目的修复**：`BM_AddOrder_NoMatch` 每 `kBatchSize` 次迭代在 `PauseTiming` 内重建 `OrderBook`（保留固定 100 档卖单背景深度），使每次 `add_order` 面对的树深度恒定，测出的是**稳态固定深度下的插入延迟**。
 
 ### 陷阱 4：用 `Iterations(N)` 固定迭代次数
 
@@ -272,7 +287,12 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
 BENCHMARK(BM_AddOrder_NoMatch)->Iterations(100'000);
 ```
 
-框架默认会自动决定迭代次数（通常更多），固定 `Iterations` 可以保证结果的可重复性，但要小心：`Iterations` 太少时误差大，太多时 benchmark 跑太慢影响 CI。
+框架默认会自动决定迭代次数（直到连续几次测量的相对误差 < 0.5% 才停）。
+固定 `Iterations` 的问题：
+- 次数太少时误差大，结果不稳定
+- 在"共享 OrderBook 状态"的场景下，固定次数会加剧深度不一致的问题（因为你可以精确算出最终深度，但平均值仍然混合了不同深度的延迟）
+
+**本项目的修复**：`BM_AddOrder_NoMatch` 和 `BM_AddOrder_FullMatch` 均已去掉 `->Iterations(N)`，交由框架自动决定，确保统计稳定性。`BM_CancelOrder` 和 `BM_MixedWorkload` 保留固定次数，因为它们的每次迭代开销较重（前者每迭代重建 10000 单，后者每迭代处理 100000 单），自动迭代会导致运行时间过长。
 
 ---
 

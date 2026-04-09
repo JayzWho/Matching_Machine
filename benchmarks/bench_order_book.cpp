@@ -17,9 +17,9 @@
  */
 
 #include <benchmark/benchmark.h>
+#include <memory>
 #include "order_book.h"
 #include "feed_simulator.h"
-#include "memory_pool.h"
 
 using namespace me;
 
@@ -40,50 +40,99 @@ static Order make_order(uint64_t id, Side side, int64_t price, int64_t qty) {
 // ── 1. 纯挂单，无撮合 ────────────────────────────────────────────────────────
 // 测量在无法成交时（买价始终低于卖价），add_order 的纯挂单开销。
 // 这是 OrderBook 操作的下界延迟。
+//
+// 设计说明：
+//   - 预生成订单列表，避免循环内 make_order 构造开销混入计时。
+//   - 每 kBatchSize 次迭代在 PauseTiming 内重建 OrderBook（重挂固定背景卖单
+//     并清空累积的买单），保证每次 add_order 面对的树深度恒定在 kBgDepth，
+//     测出的是"稳态固定深度下的插入延迟"。
+//   - 不固定 Iterations，让框架自动决定（误差 < 0.5% 才停），结果更可信。
 static void BM_AddOrder_NoMatch(benchmark::State& state) {
-    OrderBook book("BTCUSD");
+    constexpr int kBgDepth   = 100;   // 背景卖单档位数（固定盘口深度）
+    constexpr int kBatchSize = 1000;  // 每批重建一次 OrderBook
 
-    // 预先挂一些卖单作为背景深度（ask 从 101 开始）
-    for (int i = 0; i < 100; ++i) {
-        static std::vector<Order> bg_orders;
-        bg_orders.push_back(make_order(10000 + i, Side::SELL,
-                                       101'000'000 + i * 100'000, 10));
-        book.add_order(&bg_orders.back());
+    // 预生成背景卖单（ask 从 101 开始）
+    std::vector<Order> bg_sells(kBgDepth);
+    for (int i = 0; i < kBgDepth; ++i) {
+        bg_sells[i] = make_order(static_cast<uint64_t>(10000 + i), Side::SELL,
+                                 101'000'000 + i * 100'000, 10);
     }
 
-    uint64_t id = 1;
+    // 预生成被测买单（买价 99，永远不与卖单成交）
+    // 使用不同的 order_id 区间（20000~20000+kBatchSize），避免与背景卖单冲突
+    std::vector<Order> buy_orders(kBatchSize);
+    for (int i = 0; i < kBatchSize; ++i) {
+        buy_orders[i] = make_order(static_cast<uint64_t>(20000 + i),
+                                   Side::BUY, 99'000'000, 1);
+    }
+
+    // 用 unique_ptr 持有 OrderBook，以便在 PauseTiming 内重建
+    // （OrderBook 含 std::mutex，不可直接移动赋值）
+    auto rebuild_book = [&]() {
+        auto b = std::make_unique<OrderBook>("BTCUSD");
+        for (int i = 0; i < kBgDepth; ++i) b->add_order(&bg_sells[i]);
+        return b;
+    };
+    auto book = rebuild_book();
+
+    int idx = 0;
     for (auto _ : state) {
-        // 买价 99，卖价最低 101，永远不成交
-        Order o = make_order(id++, Side::BUY, 99'000'000, 1);
-        auto trades = book.add_order(&o);
+        // 每批用完后重建，维持固定深度（把构造/重置开销放入 PauseTiming）
+        if (idx > 0 && idx % kBatchSize == 0) {
+            state.PauseTiming();
+            book = rebuild_book();
+            state.ResumeTiming();
+        }
+
+        // 直接用预生成的订单，零构造开销
+        auto trades = book->add_order(&buy_orders[idx % kBatchSize]);
         benchmark::DoNotOptimize(trades);
+        ++idx;
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
-BENCHMARK(BM_AddOrder_NoMatch)->Iterations(100'000);
+BENCHMARK(BM_AddOrder_NoMatch);
 
 // ── 2. 一对一精确成交 ────────────────────────────────────────────────────────
 // 每次迭代：先挂一个卖单，再来一个完全匹配的买单，触发精确成交。
 // 这是最典型的热路径场景。
+//
+// 设计说明：
+//   - 预生成 sell/buy 配对列表，消除循环内 make_order 的构造开销。
+//   - 每次迭代在 PauseTiming 内挂卖单（准备成交对手方），
+//     计时范围精确限定在买单触发撮合的 add_order 调用上。
+//   - 不固定 Iterations，由框架自动决定。
 static void BM_AddOrder_FullMatch(benchmark::State& state) {
+    constexpr int kBatchSize = 10'000;
+
+    // 预生成卖单和买单（id 区间错开，互不冲突）
+    std::vector<Order> sell_orders(kBatchSize);
+    std::vector<Order> buy_orders(kBatchSize);
+    for (int i = 0; i < kBatchSize; ++i) {
+        sell_orders[i] = make_order(static_cast<uint64_t>(30000 + i),
+                                    Side::SELL, 100'000'000, 10);
+        buy_orders[i]  = make_order(static_cast<uint64_t>(40000 + i),
+                                    Side::BUY,  100'000'000, 10);
+    }
+
     OrderBook book("BTCUSD");
-
-    uint64_t id = 1;
+    int idx = 0;
     for (auto _ : state) {
-        // 挂卖单
-        Order sell = make_order(id++, Side::SELL, 100'000'000, 10);
-        book.add_order(&sell);
+        // PauseTiming：挂卖单（准备对手方），不计入撮合延迟
+        state.PauseTiming();
+        book.add_order(&sell_orders[idx % kBatchSize]);
+        state.ResumeTiming();
 
-        // 买单触发撮合
-        Order buy = make_order(id++, Side::BUY, 100'000'000, 10);
-        auto trades = book.add_order(&buy);
+        // 计时范围：买单触发撮合
+        auto trades = book.add_order(&buy_orders[idx % kBatchSize]);
         benchmark::DoNotOptimize(trades);
+        ++idx;
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
-BENCHMARK(BM_AddOrder_FullMatch)->Iterations(100'000);
+BENCHMARK(BM_AddOrder_FullMatch);
 
 // ── 3. 大单扫穿多档（最坏情况） ──────────────────────────────────────────────
 // 测试参数化：state.range(0) 控制被扫穿的价格档位数。
@@ -101,12 +150,14 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
                                     100'000'000 + i * 100'000, 1);
             book.add_order(&sell);
         }
-        state.ResumeTiming();  // 恢复计时：下面才是被测代码
+        
 
         // 买入大单，扫穿所有价格档位
         Order buy = make_order(id++, Side::BUY,
                                100'000'000 + (levels + 1) * 100'000,
                                levels);  // qty = levels，刚好全部成交
+        
+        state.ResumeTiming();  // 恢复计时：下面才是被测代码
         auto trades = book.add_order(&buy);
         benchmark::DoNotOptimize(trades);
     }
