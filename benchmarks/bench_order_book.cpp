@@ -190,11 +190,8 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     };
 
     // 初始填充（benchmark 开始前，不在计时区间内）
-    {
-        state.PauseTiming();
-        fill_batch();
-        state.ResumeTiming();
-    }
+    fill_batch();
+
 
     int idx = 0;
     for (auto _ : state) {
