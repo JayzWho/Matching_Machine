@@ -13,4 +13,4 @@ compile_commands.json
 results/
 learning_notes/
 
-benchmarks/bench_scripts
+.codebuddy
