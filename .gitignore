@@ -12,3 +12,5 @@ compile_commands.json
 # Benchmark results and learning notes (local only, not version-controlled)
 results/
 learning_notes/
+
+benchmarks/bench_scripts

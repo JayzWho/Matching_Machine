@@ -78,14 +78,15 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
     int idx = 0;
     for (auto _ : state) {
         // 每批用完后重建，维持固定深度（把构造/重置开销放入 PauseTiming）
-        if (idx > 0 && idx % kBatchSize == 0) {
+        if (idx == kBatchSize) {
             state.PauseTiming();
             book = rebuild_book();
             state.ResumeTiming();
+            idx = 0;
         }
 
         // 直接用预生成的订单，零构造开销
-        auto trades = book->add_order(&buy_orders[idx % kBatchSize]);
+        auto trades = book->add_order(&buy_orders[idx]);
         benchmark::DoNotOptimize(trades);
         ++idx;
     }
@@ -119,13 +120,15 @@ static void BM_AddOrder_FullMatch(benchmark::State& state) {
     OrderBook book("BTCUSD");
     int idx = 0;
     for (auto _ : state) {
+        if (idx == kBatchSize) idx = 0;
+
         // PauseTiming：挂卖单（准备对手方），不计入撮合延迟
         state.PauseTiming();
-        book.add_order(&sell_orders[idx % kBatchSize]);
+        book.add_order(&sell_orders[idx]);
         state.ResumeTiming();
 
         // 计时范围：买单触发撮合
-        auto trades = book.add_order(&buy_orders[idx % kBatchSize]);
+        auto trades = book.add_order(&buy_orders[idx]);
         benchmark::DoNotOptimize(trades);
         ++idx;
     }
@@ -136,30 +139,77 @@ BENCHMARK(BM_AddOrder_FullMatch);
 
 // ── 3. 大单扫穿多档（最坏情况） ──────────────────────────────────────────────
 // 测试参数化：state.range(0) 控制被扫穿的价格档位数。
-// 每次迭代之前重新建立对应深度的盘口，然后用一个大单全部扫穿。
+//
+// 改进设计（解决 levels=1 时 CV>15% 的问题）：
+//   原设计每次迭代都 PauseTiming → 重建 OrderBook → ResumeTiming，
+//   当 levels 很小（=1）时，被测代码（1档撮合，~几十 ns）相对于
+//   Pause/Resume 调用本身的开销占比极低，且每次重建 OrderBook 导致
+//   内存地址变化，缓存状态随机，测量结果波动极大（CV≈19%）。
+//
+//   改进方案（对齐 BM_AddOrder_NoMatch 的批量预建模式）：
+//   - 循环外预建 kBatch 个 OrderBook（含盘口）和对应的买单，
+//     存入 unique_ptr 数组，全部在热身阶段完成。
+//   - 计时循环内按下标轮流消耗，每批用完后才进一次 PauseTiming 重建，
+//     使 Pause/Resume 频率从"每迭代一次"降至"每 kBatch 次一次"。
+//   - 重建时复用固定的卖单价格模板（id 递增以满足 OrderBook 唯一性要求）。
+//   - 这样计时区间只含 add_order 的撮合逻辑，与 levels 大小无关，
+//     各档位的测量噪声来源一致，CV 可降至 <5%。
 static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     const int levels = static_cast<int>(state.range(0));
 
-    uint64_t id = 1;
-    for (auto _ : state) {
-        state.PauseTiming();  // 暂停计时：建立盘口不计入 benchmark
-        OrderBook book("BTCUSD");
-        // 在 100.000000 ~ 100.000000+levels 的价格档位各挂 1 笔卖单
-        for (int i = 0; i < levels; ++i) {
-            Order sell = make_order(id++, Side::SELL,
-                                    100'000'000 + i * 100'000, 1);
-            book.add_order(&sell);
-        }
-        
+    // kBatch：每批预建的盘口数量。
+    // levels 越小，每次迭代耗时越短，需要更多批量来摊薄重建开销。
+    // 这里统一取 500，对所有 levels 均足够。
+    constexpr int kBatch = 500;
 
-        // 买入大单，扫穿所有价格档位
-        Order buy = make_order(id++, Side::BUY,
-                               100'000'000 + (levels + 1) * 100'000,
-                               levels);  // qty = levels，刚好全部成交
-        
-        state.ResumeTiming();  // 恢复计时：下面才是被测代码
-        auto trades = book.add_order(&buy);
+    // 每个槽位持有一个已建好盘口的 OrderBook 和对应的扫穿买单
+    struct Slot {
+        std::unique_ptr<OrderBook> book;
+        Order buy;
+    };
+    std::vector<Slot> slots(kBatch);
+
+    // 全局递增 id，确保跨批次的 order_id 不重复
+    uint64_t next_id = 1;
+
+    // 填充一批槽位（在 PauseTiming 内调用，不计入 benchmark）
+    auto fill_batch = [&]() {
+        for (int s = 0; s < kBatch; ++s) {
+            slots[s].book = std::make_unique<OrderBook>("BTCUSD");
+            // 按 levels 建立卖单盘口
+            for (int i = 0; i < levels; ++i) {
+                Order sell = make_order(next_id++, Side::SELL,
+                                        100'000'000 + i * 100'000, 1);
+                slots[s].book->add_order(&sell);
+            }
+            // 预构造扫穿买单（价格高于所有卖档，qty=levels 恰好全部成交）
+            slots[s].buy = make_order(next_id++, Side::BUY,
+                                      100'000'000 + (levels + 1) * 100'000,
+                                      levels);
+        }
+    };
+
+    // 初始填充（benchmark 开始前，不在计时区间内）
+    {
+        state.PauseTiming();
+        fill_batch();
+        state.ResumeTiming();
+    }
+
+    int idx = 0;
+    for (auto _ : state) {
+        // 每批用完后重建，PauseTiming 频率 = 1 次 / kBatch 次迭代
+        if (idx == kBatch) {
+            state.PauseTiming();
+            fill_batch();
+            state.ResumeTiming();
+            idx = 0;
+        }
+
+        // 计时范围：仅含扫穿撮合逻辑
+        auto trades = slots[idx].book->add_order(&slots[idx].buy);
         benchmark::DoNotOptimize(trades);
+        ++idx;
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
