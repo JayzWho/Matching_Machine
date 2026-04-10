@@ -217,7 +217,7 @@ BENCHMARK(BM_AddOrder_SweepLevels)->Arg(1)->Arg(5)->Arg(10)->Arg(20);
 // ── 4. 撤单操作延迟 ──────────────────────────────────────────────────────────
 static void BM_CancelOrder(benchmark::State& state) {
     // 预分配订单存储，避免 benchmark 循环中 vector 重分配
-    constexpr size_t kBatchSize = 10'000;
+    constexpr size_t kBatchSize = 10'00;
     std::vector<Order> orders(kBatchSize);
 
     uint64_t id = 1;
@@ -242,7 +242,7 @@ static void BM_CancelOrder(benchmark::State& state) {
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
-BENCHMARK(BM_CancelOrder)->Iterations(50'000);
+BENCHMARK(BM_CancelOrder);
 
 // ── 5. 混合流量（模拟真实场景） ───────────────────────────────────────────────
 // 使用 FeedSimulator 生成真实分布的订单序列（限价单 + 撤单混合）
@@ -250,7 +250,7 @@ BENCHMARK(BM_CancelOrder)->Iterations(50'000);
 static void BM_MixedWorkload(benchmark::State& state) {
     // 预生成订单（不计入 benchmark 时间）
     FeedSimulator sim("BTCUSD", 100'000'000, /*seed=*/42);
-    auto orders = sim.generate_random(100'000, /*cancel_ratio=*/0.1);
+    auto orders = sim.generate_random(1000'000, /*cancel_ratio=*/0.1);
 
     for (auto _ : state) {
         state.PauseTiming();
@@ -274,4 +274,4 @@ static void BM_MixedWorkload(benchmark::State& state) {
         static_cast<int64_t>(state.iterations()) *
         static_cast<int64_t>(orders.size()));
 }
-BENCHMARK(BM_MixedWorkload)->Iterations(20);
+BENCHMARK(BM_MixedWorkload)->Iterations(50);
