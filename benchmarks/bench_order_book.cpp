@@ -162,9 +162,11 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     // 这里统一取 500，对所有 levels 均足够。
     constexpr int kBatch = 500;
 
-    // 每个槽位持有一个已建好盘口的 OrderBook 和对应的扫穿买单
+    // 每个槽位持有一个已建好盘口的 OrderBook、对应的卖单列表和扫穿买单
+    // sells 与 Slot 共存亡，确保 OrderBook 内部保存的指针在整批次期间始终有效
     struct Slot {
         std::unique_ptr<OrderBook> book;
+        std::vector<Order> sells;  // 卖单持久化存储，避免悬空指针
         Order buy;
     };
     std::vector<Slot> slots(kBatch);
@@ -176,11 +178,12 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     auto fill_batch = [&]() {
         for (int s = 0; s < kBatch; ++s) {
             slots[s].book = std::make_unique<OrderBook>("BTCUSD");
-            // 按 levels 建立卖单盘口
+            // 按 levels 建立卖单盘口，卖单存入 sells 向量（指针在批次结束前一直有效）
+            slots[s].sells.resize(levels);
             for (int i = 0; i < levels; ++i) {
-                Order sell = make_order(next_id++, Side::SELL,
-                                        100'000'000 + i * 100'000, 1);
-                slots[s].book->add_order(&sell);
+                slots[s].sells[i] = make_order(next_id++, Side::SELL,
+                                               100'000'000 + i * 100'000, 1);
+                slots[s].book->add_order(&slots[s].sells[i]);
             }
             // 预构造扫穿买单（价格高于所有卖档，qty=levels 恰好全部成交）
             slots[s].buy = make_order(next_id++, Side::BUY,
