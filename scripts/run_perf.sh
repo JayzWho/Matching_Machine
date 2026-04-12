@@ -95,7 +95,7 @@ run_perf() {
         --call-graph "$CALL_GRAPH" \
         -F "$PERF_FREQ" \
         -o "$PERF_DATA" \
-        -- "$BINARY" --benchmark_min_time=5 2>/dev/null || \
+        -- "$BINARY" --benchmark_min_time=5s 2>/dev/null || \
     taskset -c 0 perf record \
         -g \
         --call-graph "$CALL_GRAPH" \
