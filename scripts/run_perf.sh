@@ -16,8 +16,9 @@
 #       echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid
 #
 # 输出：
-#   results/flamegraph_<output_name>.svg  — 可在浏览器中交互查看
-#   results/perf_<output_name>.data       — 原始 perf 数据（可用 perf report 查看）
+#   results/flamegraph_<output_name>.svg        — 可在浏览器中交互查看
+#   results/perf_<output_name>.data             — 原始 perf 数据（可用 perf report 查看）
+#   results/perf_report_<output_name>.txt       — perf 文本级热点报告
 # =============================================================================
 
 set -euo pipefail
@@ -134,17 +135,27 @@ generate_flamegraph() {
 # ── perf report 摘要 ─────────────────────────────────────────────────────────
 show_report() {
     local PERF_DATA="$RESULTS_DIR/perf_${NAME}.data"
+    local REPORT_TXT="$RESULTS_DIR/perf_report_${NAME}.txt"
 
     echo ""
     echo "[*] 热点函数摘要（Top 20）："
     echo "------------------------------------------------------------"
-    perf report -i "$PERF_DATA" \
-        --stdio \
-        --no-children \
-        --sort=symbol \
-        -n \
-        2>/dev/null | head -40 || \
-    perf report -i "$PERF_DATA" --stdio 2>/dev/null | head -40
+
+    # 生成完整文本报告并保存到文件
+    {
+        perf report -i "$PERF_DATA" \
+            --stdio \
+            --no-children \
+            --sort=symbol \
+            -n \
+            2>/dev/null || \
+        perf report -i "$PERF_DATA" --stdio 2>/dev/null
+    } > "$REPORT_TXT"
+
+    # 终端只显示前 40 行摘要
+    head -40 "$REPORT_TXT"
+
+    echo "[✓] 完整文本报告已保存: $REPORT_TXT"
 }
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
@@ -169,6 +180,10 @@ main() {
     echo ""
     echo " 查看 perf 报告（交互式）："
     echo "   perf report -i $RESULTS_DIR/perf_${NAME}.data"
+    echo ""
+    echo " 查看文本报告："
+    echo "   cat $RESULTS_DIR/perf_report_${NAME}.txt"
+    echo "   less $RESULTS_DIR/perf_report_${NAME}.txt"
     echo ""
     if [ "${SKIP_FLAMEGRAPH:-0}" -eq 0 ]; then
         echo " 查看火焰图："
