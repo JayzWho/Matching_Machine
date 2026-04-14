@@ -102,6 +102,15 @@ size_t OrderBook::order_count() const noexcept {
     return order_index_.size();
 }
 
+void OrderBook::clear() noexcept {
+    bid_levels_.clear();
+    ask_levels_.clear();
+    order_index_.clear();
+    trade_id_counter_ = 0;
+    // 注意：不调用 order_index_.reserve()，保留已分配的桶内存，
+    // 避免反复 reserve 导致不必要的堆操作。
+}
+
 // ── 核心撮合逻辑（价格-时间优先） ─────────────────────────────────────────────
 //
 // 【原始版本】trades 无预分配 reserve，每次都从空 vector 开始，

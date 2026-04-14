@@ -50,6 +50,14 @@ public:
 
     [[nodiscard]] size_t order_count() const noexcept;
 
+    /**
+     * @brief 清空订单簿，保留已分配的内存（用于 benchmark 内批量复用）
+     *
+     * 清除所有价格档位和订单索引，重置成交计数器。
+     * 注意：调用方负责管理 Order 对象的生命周期，clear() 不会释放 Order 指针。
+     */
+    void clear() noexcept;
+
 private:
     std::vector<Trade> match(Order* incoming);
 
