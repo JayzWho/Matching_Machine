@@ -16,6 +16,9 @@ endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_DEBUG   "-g -O0 -fsanitize=address,undefined")
 
+# ── Abseil（系统安装：apt install libabsl-dev） ───────────────────────────────
+find_package(absl REQUIRED)
+
 # ── 第三方依赖（FetchContent 自动下载） ──────────────────────────────────────
 include(FetchContent)
 
@@ -52,6 +55,10 @@ target_include_directories(matching_engine_lib PUBLIC
 
 target_compile_options(matching_engine_lib PRIVATE
   -Wall -Wextra -Wpedantic
+)
+
+target_link_libraries(matching_engine_lib PUBLIC
+  absl::flat_hash_map
 )
 
 # ── 主程序可执行文件 ──────────────────────────────────────────────────────────

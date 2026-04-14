@@ -3,19 +3,20 @@
 #include "order.h"
 #include <map>
 #include <vector>
-#include <unordered_map>
-#include <mutex>
 #include <functional>
 #include <cstdint>
+#include <string>
+#include <string_view>
+#include <cstddef>
+#include "absl/container/flat_hash_map.h"
 
 namespace me {
 
 /**
- * @brief 订单簿（Order Book）— mutex 版本（v2，已优化）
+ * @brief 订单簿（Order Book）— 单线程无锁版本（v3，进一步优化）
  *
- * 本版本使用 std::mutex 保证线程安全，作为 lock-free 版本的功能基线。
- * 后续 Week 4-5 会用 SPSC ring buffer 将接收线程与处理线程解耦，
- * 届时 OrderBook 可以运行在单线程上，mutex 可以移除。
+ * 本版本针对 SPSC 架构下 Consumer 线程独占访问的场景，已移除 mutex。
+ * OrderBook 不保证线程安全，调用方需确保单线程访问（由 SPSC 保证）。
  *
  * 数据结构选择：
  *   bid_levels_: std::map<int64_t, PriceLevel, std::greater<>>
@@ -23,8 +24,10 @@ namespace me {
  *     - PriceLevel（vector + head 游标）保证同价格内按时间先后排列（FIFO）
  *   ask_levels_: std::map<int64_t, PriceLevel>
  *     - 价格从低到高有序（卖方最优价在最前）
- *   order_index_: unordered_map<order_id, Order*>
- *     - O(1) 查找，用于快速撤单；reserve(65536) 避免 rehash
+ *   order_index_: absl::flat_hash_map<order_id, Order*>
+ *     - open-addressing（Swiss Table）替代 std::unordered_map 链地址法
+ *     - 桶连续排列，零额外堆分配，cache 局部性显著优于 std::unordered_map
+ *     - reserve(65536) 避免 rehash；flat_hash_map 默认 load_factor ≤ 0.875
  *
  * 优化前快照（deque 版本）见：docs/snapshots/order_book_v1_deque.{h,cpp}
  */
@@ -66,12 +69,19 @@ public:
     /// 当前订单总数（用于测试验证）
     [[nodiscard]] size_t order_count() const noexcept;
 
+    /**
+     * @brief 清空订单簿，保留已分配的内存（用于 benchmark 内批量复用）
+     *
+     * 清除所有价格档位和订单索引，重置成交计数器。
+     * 注意：调用方负责管理 Order 对象的生命周期，clear() 不会释放 Order 指针。
+     */
+    void clear() noexcept;
+
 private:
-    /// 内部撮合逻辑（在已持有锁的情况下调用）
+    /// 内部撮合逻辑
     std::vector<Trade> match(Order* incoming);
 
     std::string symbol_;
-    mutable std::mutex mtx_;
 
     /**
      * PriceLevel：同一价格档位下的订单队列。
@@ -118,8 +128,10 @@ private:
     std::map<int64_t, PriceLevel>                        ask_levels_;
 
     // 订单索引：order_id → Order*，用于 O(1) 撤单
+    // absl::flat_hash_map：open-addressing (Swiss Table)，桶连续排列，
+    // 零额外堆分配，cache 局部性显著优于 std::unordered_map 的链地址法
     // reserve(65536) 避免高频插入触发 rehash
-    std::unordered_map<uint64_t, Order*> order_index_;
+    absl::flat_hash_map<uint64_t, Order*> order_index_;
 
     TradeCallback trade_cb_;
     uint64_t      trade_id_counter_ = 0;
