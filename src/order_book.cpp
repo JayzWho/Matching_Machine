@@ -1,5 +1,6 @@
 #include "order_book.h"
 #include <chrono>
+#include <algorithm>
 
 namespace me {
 
@@ -15,8 +16,6 @@ OrderBook::~OrderBook() = default;
 
 std::vector<Trade> OrderBook::add_order(Order* order) {
     if (!order) return {};
-
-    std::lock_guard<std::mutex> lock(mtx_);
 
     // 为订单打上入队时间戳（如果调用方没有设置）
     if (order->timestamp_ns == 0) {
@@ -48,8 +47,6 @@ std::vector<Trade> OrderBook::add_order(Order* order) {
 }
 
 bool OrderBook::cancel_order(uint64_t order_id) {
-    std::lock_guard<std::mutex> lock(mtx_);
-
     auto it = order_index_.find(order_id);
     if (it == order_index_.end()) return false;
 
@@ -92,20 +89,26 @@ bool OrderBook::cancel_order(uint64_t order_id) {
 }
 
 int64_t OrderBook::best_bid() const noexcept {
-    std::lock_guard<std::mutex> lock(mtx_);
     if (bid_levels_.empty()) return 0;
     return bid_levels_.begin()->first;
 }
 
 int64_t OrderBook::best_ask() const noexcept {
-    std::lock_guard<std::mutex> lock(mtx_);
     if (ask_levels_.empty()) return 0;
     return ask_levels_.begin()->first;
 }
 
 size_t OrderBook::order_count() const noexcept {
-    std::lock_guard<std::mutex> lock(mtx_);
     return order_index_.size();
+}
+
+void OrderBook::clear() noexcept {
+    bid_levels_.clear();
+    ask_levels_.clear();
+    order_index_.clear();
+    trade_id_counter_ = 0;
+    // 注意：不调用 order_index_.reserve()，保留已分配的桶内存，
+    // 避免反复 reserve 导致不必要的堆操作。
 }
 
 // ── 核心撮合逻辑（价格-时间优先） ─────────────────────────────────────────────

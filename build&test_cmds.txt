@@ -1,5 +1,20 @@
-跑测试：
-cmake --build build/debug && cd build/debug && ctest
+# ── 首次配置（只需执行一次） ──────────────────────────────────────────────────
 
-跑Benchmark:
-cmake --build build/release && ./build/release/bench_order_book
+# Debug 版本（ASan + UBSan，-g -O0）
+cmake -S . -B build/debug  -DCMAKE_BUILD_TYPE=Debug
+
+# Release 版本（-O2 -DNDEBUG）
+cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
+
+# ── 构建 ──────────────────────────────────────────────────────────────────────
+
+cmake --build build/debug   -j$(nproc)
+cmake --build build/release -j$(nproc)
+
+# ── 跑测试（Debug） ───────────────────────────────────────────────────────────
+
+cmake --build build/debug -j$(nproc) && cd build/debug && ctest --output-on-failure
+
+# ── 跑 Benchmark（Release，绑核减少噪声） ────────────────────────────────────
+
+cmake --build build/release -j$(nproc) && taskset -c 0 ./build/release/bench_order_book

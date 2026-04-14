@@ -203,30 +203,6 @@ while (!ask_level.empty() && ask_level.front() == nullptr) {
 
 ---
 
-## Benchmark 数据对比
-
-> 运行环境：Linux，单核绑定（`taskset -c 0`），Release 编译（`-O2 -DNDEBUG`）
->
-> 运行命令：`taskset -c 0 ./build/release/bench_order_book`
-
-### 优化后数据（v0.2-after-opt）
-
-| Benchmark | 延迟 (ns) | 吞吐 |
-|-----------|-----------|------|
-| BM_AddOrder_NoMatch | _(填入实测数据)_ | _(填入)_ |
-| BM_AddOrder_FullMatch | _(填入实测数据)_ | _(填入)_ |
-| BM_AddOrder_SweepLevels/1 | _(填入实测数据)_ | _(填入)_ |
-| BM_AddOrder_SweepLevels/5 | _(填入实测数据)_ | _(填入)_ |
-| BM_AddOrder_SweepLevels/10 | _(填入实测数据)_ | _(填入)_ |
-| BM_AddOrder_SweepLevels/20 | _(填入实测数据)_ | _(填入)_ |
-| BM_CancelOrder | _(填入实测数据)_ | _(填入)_ |
-| BM_MixedWorkload | _(填入实测数据)_ | _(填入)_ |
-
-> **TODO**：运行 `taskset -c 0 ./build/release/bench_order_book` 后将数据填入上表。
-> 同时将 JSON 输出保存至 `results/bench_after_opt.json`。
-
----
-
 ## 面试讲解要点
 
 1. **为什么用 vector + head 游标而非直接用 deque？**
@@ -242,3 +218,122 @@ while (!ask_level.empty() && ask_level.front() == nullptr) {
    > 不会。撤单在真实交易系统中是相对低频的操作（远少于 add/match）。
    > match() 中用 `while (front() == nullptr) pop_front()` 一次性清理空洞，
    > 且 compact 逻辑会定期压缩 vector，防止空洞积累。
+
+---
+
+## 优化 #5：移除 `std::mutex`
+
+### 问题
+
+`OrderBook` v2 在所有公开方法（`add_order`、`cancel_order`、`best_bid`、
+`best_ask`、`order_count`）上都使用 `std::lock_guard<std::mutex>`：
+
+```cpp
+// 优化前
+std::vector<Trade> add_order(Order* order) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    // ...
+}
+```
+
+实际上所有调用方（`main.cpp`、benchmarks、tests）均为**纯单线程**，
+mutex 从未有过竞争，但每次调用仍需付出约 **20~40 ns** 的 `futex` 快路径开销。
+
+### 修改
+
+```cpp
+// order_book.h：删除
+mutable std::mutex mtx_;
+
+// order_book.cpp：删除全部 lock_guard
+// add_order、cancel_order、best_bid、best_ask、order_count 中的 lock_guard 全部移除
+```
+
+类注释从"mutex 版本（v2）"更新为"单线程无锁版本（v3）"。
+
+### 理论分析
+
+| | 优化前 | 优化后 |
+|---|---|---|
+| 无竞争 lock/unlock | ~20~40 ns/次 | 0 |
+| 多方法调用 (add+match+cancel) | 可能多次加锁 | 无 |
+| SPSC 安全性 | 由 mutex 保证 | 由 SPSC 架构保证（单消费者独占） |
+
+预期效果：所有 benchmark 均匀提升约 10~15%（与每次调用的绝对延迟相关）。
+
+---
+
+## 优化 #6：`std::unordered_map` → `absl::flat_hash_map`
+
+### 问题
+
+perf 采样（P0-A BM_MixedWorkload）显示，`order_index_` 相关函数累计占 **32%** CPU 时间：
+- `operator[]`（插入/查找）：25.57%
+- `_M_erase`（两处撤单/成交路径）：6.73%
+
+根源在于 `std::unordered_map` 的**链地址法（chaining）**实现：
+- 每次插入 `new` 一个链表节点，节点散落在堆上
+- `find` 需要遍历链表，随机内存访问，cache miss 频繁
+- `reserve` 只消除 rehash，无法改变链地址法本身的访问模式
+
+### 修改
+
+```cpp
+// order_book.h：替换头文件和成员类型
+// 前：
+#include <unordered_map>
+std::unordered_map<uint64_t, Order*> order_index_;
+
+// 后：
+#include "absl/container/flat_hash_map.h"
+absl::flat_hash_map<uint64_t, Order*> order_index_;
+```
+
+`order_book.cpp` 和 `matching_engine.cpp` 无需任何改动（接口完全兼容）。
+
+**CMakeLists.txt** 新增依赖：
+```cmake
+FetchContent_Declare(
+  abseil-cpp
+  GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git
+  GIT_TAG        20240722.0
+)
+set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(... abseil-cpp)
+
+target_link_libraries(matching_engine_lib PUBLIC absl::flat_hash_map)
+```
+
+### 理论分析
+
+`absl::flat_hash_map` 使用 **Swiss Table** 算法（open-addressing + SSE2 SIMD）：
+
+| 特性 | `std::unordered_map` | `absl::flat_hash_map` |
+|---|---|---|
+| 碰撞处理 | 链地址法（heap 节点） | 开放寻址（连续内存，无堆分配） |
+| `find` 探测 | 链表遍历（随机访问） | SSE2 批量 16 字节比较 |
+| 插入堆分配 | 每次 1 次 `new` | 零（槽位预分配） |
+| cache 局部性 | 差 | 优（桶连续排列） |
+
+预期效果：`operator[]` 热点从 25.57% 降至 ~10%，整体 MixedWorkload 延迟下降 15~25%。
+
+---
+
+## Benchmark 数据对比（v0.3-after-opt）
+
+> 运行环境：Linux，单核绑定（`taskset -c 0`），Release 编译（`-O2 -DNDEBUG`）
+>
+> 运行命令：`taskset -c 0 ./build/release/bench_order_book`
+
+| Benchmark | 延迟 (ns) | 吞吐 |
+|-----------|-----------|------|
+| BM_AddOrder_NoMatch | _(填入实测数据)_ | _(填入)_ |
+| BM_AddOrder_FullMatch | _(填入实测数据)_ | _(填入)_ |
+| BM_AddOrder_SweepLevels/1 | _(填入实测数据)_ | _(填入)_ |
+| BM_AddOrder_SweepLevels/5 | _(填入实测数据)_ | _(填入)_ |
+| BM_AddOrder_SweepLevels/10 | _(填入实测数据)_ | _(填入)_ |
+| BM_AddOrder_SweepLevels/20 | _(填入实测数据)_ | _(填入)_ |
+| BM_CancelOrder | _(填入实测数据)_ | _(填入)_ |
+| BM_MixedWorkload | _(填入实测数据)_ | _(填入)_ |
+
+> **TODO**：运行 `taskset -c 0 ./build/release/bench_order_book` 后将数据填入上表。
