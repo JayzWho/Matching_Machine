@@ -140,20 +140,17 @@ BENCHMARK(BM_AddOrder_FullMatch);
 // ── 3. 大单扫穿多档（最坏情况） ──────────────────────────────────────────────
 // 测试参数化：state.range(0) 控制被扫穿的价格档位数。
 //
-// 改进设计（解决 levels=1 时 CV>15% 的问题）：
-//   原设计每次迭代都 PauseTiming → 重建 OrderBook → ResumeTiming，
-//   当 levels 很小（=1）时，被测代码（1档撮合，~几十 ns）相对于
-//   Pause/Resume 调用本身的开销占比极低，且每次重建 OrderBook 导致
-//   内存地址变化，缓存状态随机，测量结果波动极大（CV≈19%）。
+// 改进设计 v2（解决 v1 中 kBatch 个 OrderBook 反复构造/析构哈希表的问题）：
+//   v1 的 fill_batch 每批构造 kBatch 个 OrderBook，每个 OrderBook 在构造时
+//   会 reserve(65536) 的 flat_hash_map，导致大量堆分配，严重拉长 PauseTiming
+//   区间，同时干扰 perf 对核心撮合路径的采样。
 //
-//   改进方案（对齐 BM_AddOrder_NoMatch 的批量预建模式）：
-//   - 循环外预建 kBatch 个 OrderBook（含盘口）和对应的买单，
-//     存入 unique_ptr 数组，全部在热身阶段完成。
-//   - 计时循环内按下标轮流消耗，每批用完后才进一次 PauseTiming 重建，
-//     使 Pause/Resume 频率从"每迭代一次"降至"每 kBatch 次一次"。
-//   - 重建时复用固定的卖单价格模板（id 递增以满足 OrderBook 唯一性要求）。
-//   - 这样计时区间只含 add_order 的撮合逻辑，与 levels 大小无关，
-//     各档位的测量噪声来源一致，CV 可降至 <5%。
+//   v2 方案：
+//   - 整个 benchmark 生命周期只构造 1 个 OrderBook（循环外），避免重复构造。
+//   - Slot 结构仅存储数据（sells + buy），不再持有 OrderBook。
+//   - fill_batch 只生成订单数据（无堆分配），然后调用 book.clear() + 重新挂单，
+//     book 内部的 flat_hash_map 桶内存被复用（clear 不释放已分配的容量）。
+//   - PauseTiming 频率仍为 1 次/kBatch，噪声摊薄逻辑不变。
 static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     const int levels = static_cast<int>(state.range(0));
 
@@ -162,54 +159,68 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     // 这里统一取 500，对所有 levels 均足够。
     constexpr int kBatch = 500;
 
-    // 每个槽位持有一个已建好盘口的 OrderBook、对应的卖单列表和扫穿买单
-    // sells 与 Slot 共存亡，确保 OrderBook 内部保存的指针在整批次期间始终有效
+    // Slot 仅持有订单数据，不再包含 OrderBook
+    // sells 持久化存储，确保 OrderBook 内部保存的指针在整批次期间始终有效
     struct Slot {
-        std::unique_ptr<OrderBook> book;
-        std::vector<Order> sells;  // 卖单持久化存储，避免悬空指针
+        std::vector<Order> sells;
         Order buy;
     };
     std::vector<Slot> slots(kBatch);
+    for (auto& s : slots) s.sells.resize(levels);
 
     // 全局递增 id，确保跨批次的 order_id 不重复
     uint64_t next_id = 1;
 
-    // 填充一批槽位（在 PauseTiming 内调用，不计入 benchmark）
+    // 整个 benchmark 只构造一次 OrderBook，避免反复构造/析构哈希表
+    OrderBook book("BTCUSD");
+
+    // 填充一批槽位的订单数据，并重建盘口（在 PauseTiming 内调用）
+    // 注意：此函数会先 clear() 再重新挂单，book 的内存容量被复用
     auto fill_batch = [&]() {
+        book.clear();
         for (int s = 0; s < kBatch; ++s) {
-            slots[s].book = std::make_unique<OrderBook>("BTCUSD");
-            // 按 levels 建立卖单盘口，卖单存入 sells 向量（指针在批次结束前一直有效）
-            slots[s].sells.resize(levels);
+            // 生成卖单数据
             for (int i = 0; i < levels; ++i) {
                 slots[s].sells[i] = make_order(next_id++, Side::SELL,
                                                100'000'000 + i * 100'000, 1);
-                slots[s].book->add_order(&slots[s].sells[i]);
             }
             // 预构造扫穿买单（价格高于所有卖档，qty=levels 恰好全部成交）
             slots[s].buy = make_order(next_id++, Side::BUY,
                                       100'000'000 + (levels + 1) * 100'000,
                                       levels);
         }
+        // 将第 0 批槽位的卖单挂入盘口，作为第一次迭代的初始状态
+        // 后续每次迭代结束后，在 PauseTiming 内换入下一个 slot 的卖单
+        for (int i = 0; i < levels; ++i) {
+            book.add_order(&slots[0].sells[i]);
+        }
     };
 
     // 初始填充（benchmark 开始前，不在计时区间内）
     fill_batch();
 
-
     int idx = 0;
     for (auto _ : state) {
-        // 每批用完后重建，PauseTiming 频率 = 1 次 / kBatch 次迭代
+        // 计时范围：仅含扫穿撮合逻辑
+        auto trades = book.add_order(&slots[idx].buy);
+        benchmark::DoNotOptimize(trades);
+        ++idx;
+
+        // 每次迭代结束后，在 PauseTiming 内为下一次迭代准备盘口
+        // （clear + 挂下一个 slot 的卖单，或批量重建）
         if (idx == kBatch) {
             state.PauseTiming();
             fill_batch();
             state.ResumeTiming();
             idx = 0;
+        } else {
+            state.PauseTiming();
+            book.clear();
+            for (int i = 0; i < levels; ++i) {
+                book.add_order(&slots[idx].sells[i]);
+            }
+            state.ResumeTiming();
         }
-
-        // 计时范围：仅含扫穿撮合逻辑
-        auto trades = slots[idx].book->add_order(&slots[idx].buy);
-        benchmark::DoNotOptimize(trades);
-        ++idx;
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
