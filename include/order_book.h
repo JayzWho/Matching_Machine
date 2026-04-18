@@ -207,6 +207,14 @@ void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf)
             ask_levels_[order->price].push(order);
         }
     }
+
+    // deallocate_cb_ 统一负责归还所有"处理完毕"的 Order：
+    //   - FILLED incoming  → 在此归还
+    //   - CANCEL incoming  → 上方 early-return 处已归还
+    //   - 挂单（PARTIAL/NEW）→ 留在 PriceLevel，由 match_noalloc 在其被后续成交时归还
+    if (order->is_filled() && deallocate_cb_) {
+        deallocate_cb_(order);
+    }
 }
 
 template<size_t Cap>

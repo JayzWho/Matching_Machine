@@ -27,8 +27,11 @@ inline constexpr size_t kOrderQueueCap  = 4096;
 /// 归还队列容量（Consumer → Producer 归还 Order*，2 的幂）
 inline constexpr size_t kReturnQueueCap = 4096;
 
-/// 内存池容量（Order 对象槽位数，应 ≥ 队列容量 + 最大挂单深度）
-inline constexpr size_t kOrderPoolCap   = 16384;
+/// 内存池默认容量（Order 对象槽位数）
+/// 最坏情况：order_count 笔订单全部挂单无成交，需 = order_count。
+/// 128K 可覆盖 10 万笔测试，并留有余量应对极端挂单堆积场景。
+/// MemoryPool 现已改为堆分配（vector），此常量仅作为 start() 未显式指定时的默认值。
+inline constexpr size_t kOrderPoolCap   = 131072;
 
 /**
  * @brief 撮合引擎
@@ -146,7 +149,9 @@ private:
     void consumer_loop(std::string_view symbol);
 
     // 内存池（生产者线程独占 allocate + deallocate）
-    MemoryPool<Order, kOrderPoolCap> order_pool_;
+    // 容量 kOrderPoolCap（128K）：覆盖 10 万笔全挂单最坏情况
+    // 使用堆分配（vector），不占用栈空间
+    MemoryPool<Order> order_pool_{kOrderPoolCap};
 
     // 订单工作队列：Producer 写 → Consumer 读
     SPSCRingBuffer<Order*, kOrderQueueCap>  order_queue_;
@@ -163,11 +168,16 @@ private:
     std::thread producer_thread_;
     std::thread consumer_thread_;
 
-    // running_：生产者写 false 表示"生产完毕"，消费者读以决定是否退出
+    // running_：流水线是否在运行（start/stop 控制）
     std::atomic<bool> running_{false};
 
-    // producer_done_：生产者完成所有推送后设为 true，消费者检查此标志排空后退出
+    // producer_done_：生产者完成所有推送后设为 true
+    //   消费者见此标志且 order_queue_ 空时退出
     std::atomic<bool> producer_done_{false};
+
+    // consumer_done_：消费者完成所有处理后设为 true
+    //   生产者（阶段二）见此标志且 return_queue_ 空时退出
+    std::atomic<bool> consumer_done_{false};
 
     // 消费者已处理订单计数
     std::atomic<size_t> consumed_count_{0};

@@ -1,13 +1,14 @@
 #include "memory_pool.h"
 #include "order.h"
 #include <gtest/gtest.h>
+#include <array>
 
 using namespace me;
 
 // ── 基础功能测试 ──────────────────────────────────────────────────────────────
 
 TEST(MemoryPoolTest, InitialState) {
-    MemoryPool<int, 8> pool;
+    MemoryPool<int> pool(8);
     EXPECT_EQ(pool.available(), 8u);
     EXPECT_EQ(pool.capacity(), 8u);
     EXPECT_TRUE(pool.empty());   // empty() = 全部空闲
@@ -15,7 +16,7 @@ TEST(MemoryPoolTest, InitialState) {
 }
 
 TEST(MemoryPoolTest, AllocateAndDeallocate) {
-    MemoryPool<int, 4> pool;
+    MemoryPool<int> pool(4);
 
     int* p = pool.allocate();
     ASSERT_NE(p, nullptr);
@@ -30,7 +31,7 @@ TEST(MemoryPoolTest, AllocateAndDeallocate) {
 }
 
 TEST(MemoryPoolTest, AllocateFillsPool) {
-    MemoryPool<int, 3> pool;
+    MemoryPool<int> pool(3);
 
     int* p1 = pool.allocate();
     int* p2 = pool.allocate();
@@ -54,7 +55,7 @@ TEST(MemoryPoolTest, AllocateFillsPool) {
 }
 
 TEST(MemoryPoolTest, ReuseAfterDeallocate) {
-    MemoryPool<int, 2> pool;
+    MemoryPool<int> pool(2);
 
     int* p1 = pool.allocate();
     ASSERT_NE(p1, nullptr);
@@ -68,7 +69,7 @@ TEST(MemoryPoolTest, ReuseAfterDeallocate) {
 }
 
 TEST(MemoryPoolTest, DeallocateNullptrIsSafe) {
-    MemoryPool<int, 4> pool;
+    MemoryPool<int> pool(4);
     // deallocate(nullptr) 不应崩溃
     pool.deallocate(nullptr);
     EXPECT_EQ(pool.available(), 4u);
@@ -77,7 +78,7 @@ TEST(MemoryPoolTest, DeallocateNullptrIsSafe) {
 TEST(MemoryPoolTest, MultipleAllocationsUnique) {
     // 所有分配出来的指针应该不同
     constexpr size_t N = 16;
-    MemoryPool<int, N> pool;
+    MemoryPool<int> pool(N);
 
     std::array<int*, N> ptrs{};
     for (size_t i = 0; i < N; ++i) {
@@ -95,10 +96,36 @@ TEST(MemoryPoolTest, MultipleAllocationsUnique) {
     for (size_t i = 0; i < N; ++i) pool.deallocate(ptrs[i]);
 }
 
+// ── reset() 测试 ─────────────────────────────────────────────────────────────
+
+TEST(MemoryPoolTest, Reset_RestoresFullCapacity) {
+    // 分配若干个，归还一部分后 reset，验证 available 回到 capacity
+    MemoryPool<int> pool(4);
+
+    int* p1 = pool.allocate();
+    int* p2 = pool.allocate();
+    ASSERT_NE(p1, nullptr);
+    ASSERT_NE(p2, nullptr);
+    EXPECT_EQ(pool.available(), 2u);
+
+    // 先全部归还，再 reset（reset 前必须保证无泄漏）
+    pool.deallocate(p1);
+    pool.deallocate(p2);
+    pool.reset();
+
+    EXPECT_EQ(pool.available(), 4u);
+    EXPECT_TRUE(pool.empty());
+
+    // reset 后仍可正常分配
+    int* p3 = pool.allocate();
+    ASSERT_NE(p3, nullptr);
+    pool.deallocate(p3);
+}
+
 // ── 与 Order 结构体配合测试 ──────────────────────────────────────────────────
 
 TEST(MemoryPoolTest, WorksWithOrderStruct) {
-    MemoryPool<Order, 8> pool;
+    MemoryPool<Order> pool(8);
 
     Order* o = pool.allocate();
     ASSERT_NE(o, nullptr);
@@ -117,7 +144,7 @@ TEST(MemoryPoolTest, WorksWithOrderStruct) {
 
 TEST(MemoryPoolTest, AllocateFreeAllocateReusesMemory) {
     // 池容量为 1：先分配，归还，再分配，验证可以正常重用
-    MemoryPool<Order, 1> pool;
+    MemoryPool<Order> pool(1);
 
     Order* p1 = pool.allocate();
     ASSERT_NE(p1, nullptr);

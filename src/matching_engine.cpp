@@ -52,6 +52,7 @@ void MatchingEngine::start(std::string_view symbol,
 
     // 重置状态
     producer_done_.store(false, std::memory_order_relaxed);
+    consumer_done_.store(false, std::memory_order_relaxed);
     consumed_count_.store(0, std::memory_order_relaxed);
     latency_recorder_.reset();
     running_.store(true, std::memory_order_release);
@@ -140,8 +141,32 @@ void MatchingEngine::producer_loop(std::string_view symbol,
         }
     }
 
-    // 生产完毕，通知消费者
+    // ── 阶段二：生产任务结束，通知消费者，进入纯回收模式 ──────────────────────
     producer_done_.store(true, std::memory_order_release);
+
+    // 持续 drain return_queue_，直到消费者完成并确认归还队列已清空
+    // 这样可以保证消费者的 deallocate_cb_ 永远不会在 return_queue_ 满时死等
+    while (true) {
+        // drain return_queue_
+        {
+            Order* ret = nullptr;
+            while (return_queue_.try_pop(ret)) {
+                order_pool_.deallocate(ret);
+            }
+        }
+
+        if (consumer_done_.load(std::memory_order_acquire)) {
+            // 消费者已退出，最后再彻底排空一次（消费者退出前最后几次 push 可能刚到）
+            Order* ret = nullptr;
+            while (return_queue_.try_pop(ret)) {
+                order_pool_.deallocate(ret);
+            }
+            break;
+        }
+
+        // 消费者还在处理，让出 CPU 避免空转（VM 2 核上非常重要）
+        std::this_thread::yield();
+    }
 }
 
 // ── 消费者线程主循环 ─────────────────────────────────────────────────────────
@@ -163,21 +188,15 @@ void MatchingEngine::consumer_loop(std::string_view symbol) {
         Order* order = nullptr;
 
         if (order_queue_.try_pop(order)) {
-            // 计算端到端延迟（消费者处理完成时刻 - 生产者入队时刻）
             const uint64_t t_start = order->timestamp_ns;
 
-            // 无堆分配撮合
             book.add_order_noalloc(order, trade_buf_);
 
-            // 记录延迟
             const uint64_t latency = LatencyRecorder::now() - t_start;
             latency_recorder_.record(latency);
 
-            // incoming order 已完全成交 → 推入归还队列
-            // 未成交/部分成交的 incoming 还挂在 OrderBook 中，不能归还
-            if (order->is_filled() || order->status == OrderStatus::CANCELLED) {
-                while (!return_queue_.try_push(order)) {}
-            }
+            // 归还由 add_order_noalloc 内部的 deallocate_cb_ 统一负责：
+            //   FILLED incoming 和 CANCEL 均在那里归还；挂单留在 PriceLevel 中
 
             consumed_count_.fetch_add(1, std::memory_order_relaxed);
 
@@ -186,16 +205,17 @@ void MatchingEngine::consumer_loop(std::string_view symbol) {
             if (producer_done_.load(std::memory_order_acquire)) {
                 // 再做一次 try_pop，避免 TOCTOU（生产者在设 done 前最后推入的订单）
                 if (!order_queue_.try_pop(order)) {
-                    break;  // 真正排空，退出
+                    // 真正排空：先设 consumer_done_，再退出
+                    // 此处所有 add_order_noalloc 和 deallocate_cb_ 均已完成
+                    consumer_done_.store(true, std::memory_order_release);
+                    break;
                 }
-                // 否则继续处理这条最后的订单
+                // 处理最后一条
                 const uint64_t t_start = order->timestamp_ns;
                 book.add_order_noalloc(order, trade_buf_);
                 const uint64_t latency = LatencyRecorder::now() - t_start;
                 latency_recorder_.record(latency);
-                if (order->is_filled() || order->status == OrderStatus::CANCELLED) {
-                    while (!return_queue_.try_push(order)) {}
-                }
+                // 归还同样由 add_order_noalloc 内部统一处理
                 consumed_count_.fetch_add(1, std::memory_order_relaxed);
             }
             // 队列暂时为空但生产者未完成：继续自旋
