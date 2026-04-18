@@ -153,9 +153,9 @@ TEST(MatchingEnginePipelineTest, TradeBuffer_HasTrades) {
 }
 
 TEST(MatchingEnginePipelineTest, LargeBatch_NoHang) {
-    // 1 万笔订单，验证不会挂起或崩溃（在 2 核虚拟机上约 1~3 秒）
+    // 10 万笔订单，验证不会挂起或崩溃
     MatchingEngine engine;
-    engine.start("BTCUSD", 100'000'000, 10'000, 0.2);
+    engine.start("BTCUSD", 100'000'000, 100'000, 0.2);
 
     // 设置超时等待：最多 30 秒
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -164,7 +164,7 @@ TEST(MatchingEnginePipelineTest, LargeBatch_NoHang) {
     EXPECT_LT(std::chrono::steady_clock::now(), deadline)
         << "Pipeline took too long (> 30 seconds)";
 
-    EXPECT_EQ(engine.consumed_count(), 10'000u);
+    EXPECT_EQ(engine.consumed_count(), 100'000u);
 }
 
 // ─── 4. add_order_noalloc 单元测试（直接测 OrderBook 接口） ─────────────────
@@ -213,9 +213,12 @@ TEST(OrderBookNoallocTest, DeallocateCallback_CalledForRestingOrder) {
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
     book.add_order_noalloc(&buy, buf);
 
-    // 挂单方（sell）被完全成交 → 应触发归还回调
-    ASSERT_EQ(deallocated.size(), 1u);
-    EXPECT_EQ(deallocated[0]->order_id, 1u);  // sell 是挂单方
+    // deallocate_cb_ 语义：归还所有"处理完毕"的 Order
+    // sell（挂单方）被完全成交 → 触发归还；buy（incoming FILLED）→ 同样触发归还
+    ASSERT_EQ(deallocated.size(), 2u);
+    // 顺序：match_noalloc 先归还 resting(sell)，add_order_noalloc 末尾再归还 incoming(buy)
+    EXPECT_EQ(deallocated[0]->order_id, 1u);  // sell：挂单方，由 match_noalloc 归还
+    EXPECT_EQ(deallocated[1]->order_id, 2u);  // buy：incoming FILLED，由 add_order_noalloc 归还
 }
 
 TEST(OrderBookNoallocTest, PartialMatch_DeallocateNotCalledForPartialResting) {
@@ -229,12 +232,14 @@ TEST(OrderBookNoallocTest, PartialMatch_DeallocateNotCalledForPartialResting) {
     Order sell = make_order(1, Side::SELL, 100'000'000, 20);
     book.add_order_noalloc(&sell, buf);
 
-    // 买单只买 10：挂单方部分成交，不应被归还
+    // 买单只买 10：buy FILLED，sell 部分成交仍留在 PriceLevel
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
     book.add_order_noalloc(&buy, buf);
 
-    EXPECT_EQ(buf.size(), 1u);         // 1 笔成交
-    EXPECT_TRUE(deallocated.empty());  // 卖单仍有剩余，不归还
+    EXPECT_EQ(buf.size(), 1u);          // 1 笔成交
+    // buy 完全成交应被归还；sell 仍有剩余不归还
+    ASSERT_EQ(deallocated.size(), 1u);
+    EXPECT_EQ(deallocated[0]->order_id, 2u);  // buy：incoming FILLED
     EXPECT_EQ(sell.filled_qty, 10);
     EXPECT_EQ(sell.status, OrderStatus::PARTIAL);
 }

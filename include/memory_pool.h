@@ -1,6 +1,6 @@
 #pragma once
 
-#include <array>
+#include <vector>
 #include <cstddef>
 #include <cstdint>
 #include <cassert>
@@ -12,9 +12,10 @@ namespace me {
  * @brief 固定大小对象池（Object Pool / Memory Pool）
  *
  * 核心思想：
- *   在程序启动时一次性分配 MaxObjects 个 T 类型的存储槽位（slab）。
+ *   在构造时一次性堆分配 max_objects 个 T 类型的存储槽位（slab）。
  *   运行时 allocate() 从预分配空间直接取出，不调用 malloc/new。
  *   deallocate() 将对象归还到空闲链表，供下次复用。
+ *   reset() 重建空闲链表（不释放/重分配内存），可在 benchmark 中复用池对象。
  *
  * 性能收益：
  *   - malloc/new 在高频场景下延迟不可控（可能触发系统调用、内存整理）
@@ -23,39 +24,45 @@ namespace me {
  *
  * 限制：
  *   - 非线程安全（单线程使用，与 SPSC 模型配套）
- *   - 容量固定为 MaxObjects，超出时 allocate() 返回 nullptr
+ *   - 容量固定为构造时传入的 max_objects，超出时 allocate() 返回 nullptr
  *   - 对象 T 必须可默认构造
  *
- * @tparam T          对象类型
- * @tparam MaxObjects 最大对象数量
+ * 注意：存储使用堆分配（std::vector），避免大容量时将 MatchingEngine 放在栈上爆栈。
+ *   例：131072 个 Order（64B）= 8MB storage + 1MB free_list，作为类成员不占栈空间。
+ *
+ * @tparam T  对象类型
  */
-template<typename T, size_t MaxObjects>
+template<typename T>
 class MemoryPool {
-    static_assert(MaxObjects > 0, "MaxObjects must be > 0");
     static_assert(std::is_default_constructible_v<T>,
                   "T must be default constructible");
 
+    // 使用 aligned_storage 保证内存对齐（T 可能有对齐要求）
+    using StorageSlot = std::aligned_storage_t<sizeof(T), alignof(T)>;
+
+    static constexpr size_t kNull = SIZE_MAX;  // 链表终止哨兵
+
 public:
-    MemoryPool() {
-        // 初始化空闲链表：所有槽位链接成一个单向链表
-        // free_list_[i] 存储"下一个空闲槽的索引"
-        for (size_t i = 0; i < MaxObjects - 1; ++i) {
-            free_list_[i] = i + 1;
-        }
-        free_list_[MaxObjects - 1] = kNull;  // 链表末尾
-        free_head_ = 0;                       // 头指针指向第一个空闲槽
-        available_ = MaxObjects;
+    explicit MemoryPool(size_t max_objects)
+        : max_objects_(max_objects),
+          storage_(max_objects),
+          free_list_(max_objects)
+    {
+        assert(max_objects > 0 && "max_objects must be > 0");
+        init_free_list();
     }
 
     // 禁止拷贝（包含原始内存块，拷贝语义不合理）
     MemoryPool(const MemoryPool&) = delete;
     MemoryPool& operator=(const MemoryPool&) = delete;
 
+    // 允许移动
+    MemoryPool(MemoryPool&&) = default;
+    MemoryPool& operator=(MemoryPool&&) = default;
+
     /**
      * @brief 分配一个 T 对象的内存，并构造（placement new）
      * @return 指向新对象的指针，如果池已满则返回 nullptr
-     *
-     * 注意：对象被默认构造初始化。如果需要特定初始值，调用方负责赋值。
      */
     T* allocate() noexcept {
         if (free_head_ == kNull) return nullptr;  // 池已满
@@ -80,7 +87,7 @@ public:
             reinterpret_cast<StorageSlot*>(ptr) - storage_.data()
         );
 
-        assert(idx < MaxObjects && "Pointer does not belong to this pool");
+        assert(idx < max_objects_ && "Pointer does not belong to this pool");
 
         // 显式析构（与 placement new 配对）
         ptr->~T();
@@ -91,28 +98,45 @@ public:
         ++available_;
     }
 
+    /**
+     * @brief 重置内存池（不释放/重分配内存）
+     *
+     * 重建空闲链表，使所有槽位重新可用。
+     * 注意：调用前必须确保所有已分配的对象均已析构（deallocate），
+     *       否则会发生内存泄漏（对象析构函数不会被再次调用）。
+     * 适用于 benchmark 场景：一次构造、多次复用，避免反复堆分配开销。
+     */
+    void reset() noexcept {
+        init_free_list();
+    }
+
     /// 当前可用槽位数
     [[nodiscard]] size_t available() const noexcept { return available_; }
 
     /// 是否已满
     [[nodiscard]] bool full() const noexcept { return available_ == 0; }
 
-    /// 是否全部空闲（池里没有任何对象被使用）
-    [[nodiscard]] bool empty() const noexcept { return available_ == MaxObjects; }
+    /// 是否全部空闲
+    [[nodiscard]] bool empty() const noexcept { return available_ == max_objects_; }
 
-    /// 总容量
-    [[nodiscard]] static constexpr size_t capacity() noexcept { return MaxObjects; }
+    /// 总容量（运行期值）
+    [[nodiscard]] size_t capacity() const noexcept { return max_objects_; }
 
 private:
-    static constexpr size_t kNull = SIZE_MAX;  // 链表终止哨兵
+    void init_free_list() noexcept {
+        for (size_t i = 0; i < max_objects_ - 1; ++i) {
+            free_list_[i] = i + 1;
+        }
+        free_list_[max_objects_ - 1] = kNull;
+        free_head_  = 0;
+        available_  = max_objects_;
+    }
 
-    // 使用 aligned_storage 保证内存对齐（T 可能有对齐要求）
-    using StorageSlot = std::aligned_storage_t<sizeof(T), alignof(T)>;
-
-    std::array<StorageSlot, MaxObjects> storage_{};   // 预分配内存块
-    std::array<size_t, MaxObjects>      free_list_{}; // 空闲链表（索引数组）
-    size_t free_head_ = 0;    // 空闲链表头部索引
-    size_t available_ = 0;    // 当前可用槽位数（构造函数中初始化）
+    size_t max_objects_;
+    std::vector<StorageSlot> storage_;    // 堆分配的预分配内存块
+    std::vector<size_t>      free_list_;  // 堆分配的空闲链表（索引数组）
+    size_t free_head_ = 0;
+    size_t available_ = 0;
 };
 
 } // namespace me
