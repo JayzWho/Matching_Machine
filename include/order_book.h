@@ -1,6 +1,7 @@
 #pragma once
 
 #include "order.h"
+#include "trade_ring_buffer.h"
 #include <map>
 #include <vector>
 #include <functional>
@@ -8,9 +9,19 @@
 #include <string>
 #include <string_view>
 #include <cstddef>
+#include <algorithm>
+#include <chrono>
+#include <cstring>
 #include "absl/container/flat_hash_map.h"
 
 namespace me {
+
+/// 内存池归还回调：由 MatchingEngine 注入，用于通知外部归还已成交的挂单对象
+/// 消费者线程独占调用（通过 OrderBook 的成交逻辑触发），无需线程安全
+using DeallocateCallback = std::function<void(Order*)>;
+
+/// TradeRingBuffer 容量常量（供 OrderBook 接口模板参数使用）
+inline constexpr size_t kTradeBufCap = 4096;
 
 /**
  * @brief 订单簿（Order Book）— 单线程无锁版本（v3，进一步优化）
@@ -52,6 +63,33 @@ public:
     std::vector<Trade> add_order(Order* order);
 
     /**
+     * @brief 无堆分配版 add_order（供 MatchingEngine 消费者线程使用）
+     *
+     * 与 add_order 逻辑完全相同，区别在于：
+     *   - 成交结果直接写入外部 TradeRingBuffer，不构造 std::vector<Trade>
+     *   - 当挂单方订单被完全成交时，通过 deallocate_cb_ 通知外部归还内存池
+     *
+     * 热路径全程无堆分配。调用方（MatchingEngine）须在调用前通过
+     * set_deallocate_cb() 注册归还回调，否则挂单方 Order 不会被归还。
+     *
+     * @tparam Cap  TradeRingBuffer 的容量（模板参数，允许测试使用小容量）
+     * @param order     新到达订单的指针
+     * @param trade_buf 成交结果写入的环形缓冲区（消费者线程独占）
+     */
+    template<size_t Cap>
+    void add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf);
+
+    /**
+     * @brief 注册 Order 归还回调
+     *
+     * 每当 match_noalloc 消耗掉一个挂单方 Order（完全成交），就调用此回调。
+     * 回调通常是将 Order* 推入归还队列，由生产者线程负责调用 pool.deallocate()。
+     *
+     * @param cb  callable，签名：void(Order*)
+     */
+    void set_deallocate_cb(DeallocateCallback cb) { deallocate_cb_ = std::move(cb); }
+
+    /**
      * @brief 撤销订单
      * @return true 撤单成功，false 订单不存在或已成交
      */
@@ -78,8 +116,12 @@ public:
     void clear() noexcept;
 
 private:
-    /// 内部撮合逻辑
+    /// 内部撮合逻辑（返回 vector 版本，供旧接口使用）
     std::vector<Trade> match(Order* incoming);
+
+    /// 无堆分配撮合逻辑（模板版本，成交直接写入 trade_buf，挂单方成交后触发 deallocate_cb_）
+    template<size_t Cap>
+    void match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf);
 
     std::string symbol_;
 
@@ -110,7 +152,7 @@ private:
             if (head < orders.size()) {
                 ++head;
                 // 超过一半是空洞时 compact，均摊 O(1)
-                if (head > orders.size() / 2 && head > 16) {
+                if (head > 16 && head > orders.size() / 2) {
                     orders.erase(orders.begin(),
                                  orders.begin() + static_cast<ptrdiff_t>(head));
                     head = 0;
@@ -133,8 +175,139 @@ private:
     // reserve(65536) 避免高频插入触发 rehash
     absl::flat_hash_map<uint64_t, Order*> order_index_;
 
-    TradeCallback trade_cb_;
-    uint64_t      trade_id_counter_ = 0;
+    TradeCallback      trade_cb_;
+    DeallocateCallback deallocate_cb_;   ///< 挂单方成交后的 Order 归还回调（可选）
+    uint64_t           trade_id_counter_ = 0;
 };
+
+// ── 模板函数实现（必须在头文件内） ───────────────────────────────────────────
+
+template<size_t Cap>
+void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf) {
+    if (!order) return;
+
+    if (order->timestamp_ns == 0) {
+        order->timestamp_ns = static_cast<uint64_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+    }
+
+    if (order->type == OrderType::CANCEL) {
+        cancel_order(order->order_id);
+        if (deallocate_cb_) deallocate_cb_(order);
+        return;
+    }
+
+    order_index_[order->order_id] = order;
+    match_noalloc(order, trade_buf);
+
+    if (!order->is_filled() && order->type == OrderType::LIMIT) {
+        if (order->side == Side::BUY) {
+            bid_levels_[order->price].push(order);
+        } else {
+            ask_levels_[order->price].push(order);
+        }
+    }
+}
+
+template<size_t Cap>
+void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) {
+    if (incoming->side == Side::BUY) {
+        while (!incoming->is_filled() && !ask_levels_.empty()) {
+            auto& [ask_price, ask_level] = *ask_levels_.begin();
+            if (incoming->price < ask_price) break;     //若已无法撮合，跳出循环。
+
+            // 清理空洞
+            while (!ask_level.empty() && ask_level.front() == nullptr)
+                ask_level.pop_front();
+            if (ask_level.empty()) { ask_levels_.erase(ask_levels_.begin()); continue; }
+
+            while (!incoming->is_filled() && !ask_level.empty()) {
+                Order* resting = ask_level.front();
+                if (resting == nullptr) { ask_level.pop_front(); continue; }
+
+                int64_t match_qty = std::min(incoming->remaining_qty(),
+                                             resting->remaining_qty());
+                incoming->filled_qty += match_qty;
+                resting->filled_qty  += match_qty;
+
+                Trade t{};
+                t.trade_id      = ++trade_id_counter_;
+                t.timestamp_ns  = incoming->timestamp_ns;
+                t.buy_order_id  = incoming->order_id;
+                t.sell_order_id = resting->order_id;
+                t.price         = ask_price;
+                t.quantity      = match_qty;
+                std::memcpy(t.symbol, incoming->symbol, 8);
+                trade_buf.push_trade(t);
+                if (trade_cb_) trade_cb_(t);
+
+                if (resting->is_filled()) {
+                    resting->status = OrderStatus::FILLED;
+                    order_index_.erase(resting->order_id);
+                    ask_level.pop_front();
+                    if (deallocate_cb_) deallocate_cb_(resting);
+                } else {
+                    resting->status = OrderStatus::PARTIAL;
+                }
+            }
+            if (ask_level.empty()) ask_levels_.erase(ask_levels_.begin());
+        }
+
+        if (incoming->is_filled()) {
+            incoming->status = OrderStatus::FILLED;
+            order_index_.erase(incoming->order_id);
+        } else if (incoming->filled_qty > 0) {
+            incoming->status = OrderStatus::PARTIAL;
+        }
+
+    } else { // SELL
+        while (!incoming->is_filled() && !bid_levels_.empty()) {
+            auto& [bid_price, bid_level] = *bid_levels_.begin();
+            if (incoming->price > bid_price) break;
+
+            while (!bid_level.empty() && bid_level.front() == nullptr)
+                bid_level.pop_front();
+            if (bid_level.empty()) { bid_levels_.erase(bid_levels_.begin()); continue; }
+
+            while (!incoming->is_filled() && !bid_level.empty()) {
+                Order* resting = bid_level.front();
+                if (resting == nullptr) { bid_level.pop_front(); continue; }
+
+                int64_t match_qty = std::min(incoming->remaining_qty(),
+                                             resting->remaining_qty());
+                incoming->filled_qty += match_qty;
+                resting->filled_qty  += match_qty;
+
+                Trade t{};
+                t.trade_id      = ++trade_id_counter_;
+                t.timestamp_ns  = incoming->timestamp_ns;
+                t.buy_order_id  = resting->order_id;
+                t.sell_order_id = incoming->order_id;
+                t.price         = bid_price;
+                t.quantity      = match_qty;
+                std::memcpy(t.symbol, incoming->symbol, 8);
+                trade_buf.push_trade(t);
+                if (trade_cb_) trade_cb_(t);
+
+                if (resting->is_filled()) {
+                    resting->status = OrderStatus::FILLED;
+                    order_index_.erase(resting->order_id);
+                    bid_level.pop_front();
+                    if (deallocate_cb_) deallocate_cb_(resting);
+                } else {
+                    resting->status = OrderStatus::PARTIAL;
+                }
+            }
+            if (bid_level.empty()) bid_levels_.erase(bid_levels_.begin());
+        }
+
+        if (incoming->is_filled()) {
+            incoming->status = OrderStatus::FILLED;
+            order_index_.erase(incoming->order_id);
+        } else if (incoming->filled_qty > 0) {
+            incoming->status = OrderStatus::PARTIAL;
+        }
+    }
+}
 
 } // namespace me

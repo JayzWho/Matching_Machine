@@ -57,8 +57,12 @@ target_compile_options(matching_engine_lib PRIVATE
   -Wall -Wextra -Wpedantic
 )
 
+# ── 线程库（多线程流水线依赖） ────────────────────────────────────────────────
+find_package(Threads REQUIRED)
+
 target_link_libraries(matching_engine_lib PUBLIC
   absl::flat_hash_map
+  Threads::Threads
 )
 
 # ── 主程序可执行文件 ──────────────────────────────────────────────────────────
@@ -71,11 +75,13 @@ enable_testing()
 add_executable(test_order_book       tests/test_order_book.cpp)
 add_executable(test_spsc_ring_buffer tests/test_spsc_ring_buffer.cpp)
 add_executable(test_memory_pool      tests/test_memory_pool.cpp)
+add_executable(test_matching_engine  tests/test_matching_engine.cpp)
 
 foreach(test_target
     test_order_book
     test_spsc_ring_buffer
-    test_memory_pool)
+    test_memory_pool
+    test_matching_engine)
   target_link_libraries(${test_target} PRIVATE
     matching_engine_lib
     GTest::gtest_main
@@ -86,10 +92,12 @@ endforeach()
 # ── Benchmark 套件 ────────────────────────────────────────────────────────────
 add_executable(bench_order_book       benchmarks/bench_order_book.cpp)
 add_executable(bench_spsc_ring_buffer benchmarks/bench_spsc_ring_buffer.cpp)
+add_executable(bench_matching_engine  benchmarks/bench_matching_engine.cpp)
 
 foreach(bench_target
     bench_order_book
-    bench_spsc_ring_buffer)
+    bench_spsc_ring_buffer
+    bench_matching_engine)
   target_link_libraries(${bench_target} PRIVATE
     matching_engine_lib
     benchmark::benchmark_main
