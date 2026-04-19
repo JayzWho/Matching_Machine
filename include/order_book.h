@@ -44,7 +44,6 @@ inline constexpr size_t kTradeBufCap = 4096;
  */
 class OrderBook {
 public:
-    using TradeCallback = std::function<void(const Trade&)>;
 
     explicit OrderBook(std::string_view symbol);
     ~OrderBook();
@@ -100,9 +99,6 @@ public:
 
     /// 查询当前最优卖价（ask）
     [[nodiscard]] int64_t best_ask() const noexcept;
-
-    /// 注册成交回调（异步通知，生产中常用于风控和日志）
-    void set_trade_callback(TradeCallback cb) { trade_cb_ = std::move(cb); }
 
     /// 当前订单总数（用于测试验证）
     [[nodiscard]] size_t order_count() const noexcept;
@@ -175,7 +171,6 @@ private:
     // reserve(65536) 避免高频插入触发 rehash
     absl::flat_hash_map<uint64_t, Order*> order_index_;
 
-    TradeCallback      trade_cb_;
     DeallocateCallback deallocate_cb_;   ///< 挂单方成交后的 Order 归还回调（可选）
     uint64_t           trade_id_counter_ = 0;
 };
@@ -247,7 +242,6 @@ void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) 
                 t.quantity      = match_qty;
                 std::memcpy(t.symbol, incoming->symbol, 8);
                 trade_buf.push_trade(t);
-                if (trade_cb_) trade_cb_(t);
 
                 if (resting->is_filled()) {
                     resting->status = OrderStatus::FILLED;
@@ -295,7 +289,6 @@ void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) 
                 t.quantity      = match_qty;
                 std::memcpy(t.symbol, incoming->symbol, 8);
                 trade_buf.push_trade(t);
-                if (trade_cb_) trade_cb_(t);
 
                 if (resting->is_filled()) {
                     resting->status = OrderStatus::FILLED;

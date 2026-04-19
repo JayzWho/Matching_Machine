@@ -38,11 +38,6 @@ std::vector<Trade> OrderBook::add_order(Order* order) {
         }
     }
 
-    // 触发成交回调
-    for (const auto& t : trades) {
-        if (trade_cb_) trade_cb_(t);
-    }
-
     return trades;
 }
 
