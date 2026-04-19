@@ -183,19 +183,16 @@ TEST_F(OrderBookTest, CancelAlreadyFilledOrder) {
     EXPECT_FALSE(result);
 }
 
-// ── 回调测试 ──────────────────────────────────────────────────────────────────
+// ── 回调测试（已迁移为 TradeRingBuffer 验证） ──────────────────────────────────
 
-TEST_F(OrderBookTest, TradeCallbackInvoked) {
-    std::vector<Trade> received_trades;
-    book->set_trade_callback([&](const Trade& t) {
-        received_trades.push_back(t);
-    });
+TEST_F(OrderBookTest, TradeRecordedInRingBuffer) {
+    TradeRingBuffer<64> trade_buf;
 
     auto buy  = make_order(Side::BUY,  100'000'000, 10);
     auto sell = make_order(Side::SELL, 100'000'000, 10);
-    book->add_order(&buy);
-    book->add_order(&sell);
+    book->add_order_noalloc(&buy,  trade_buf);
+    book->add_order_noalloc(&sell, trade_buf);
 
-    EXPECT_EQ(received_trades.size(), 1u);
-    EXPECT_EQ(received_trades[0].quantity, 10);
+    EXPECT_EQ(trade_buf.size(), 1u);
+    EXPECT_EQ(trade_buf[0].quantity, 10);
 }
