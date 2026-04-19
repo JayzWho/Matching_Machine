@@ -233,7 +233,7 @@ void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) 
                 incoming->filled_qty += match_qty;
                 resting->filled_qty  += match_qty;
 
-                Trade t{};
+                Trade& t = trade_buf.alloc_slot();
                 t.trade_id      = ++trade_id_counter_;
                 t.timestamp_ns  = incoming->timestamp_ns;
                 t.buy_order_id  = incoming->order_id;
@@ -241,7 +241,6 @@ void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) 
                 t.price         = ask_price;
                 t.quantity      = match_qty;
                 std::memcpy(t.symbol, incoming->symbol, 8);
-                trade_buf.push_trade(t);
 
                 if (resting->is_filled()) {
                     resting->status = OrderStatus::FILLED;
@@ -280,7 +279,7 @@ void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) 
                 incoming->filled_qty += match_qty;
                 resting->filled_qty  += match_qty;
 
-                Trade t{};
+                Trade& t = trade_buf.alloc_slot();
                 t.trade_id      = ++trade_id_counter_;
                 t.timestamp_ns  = incoming->timestamp_ns;
                 t.buy_order_id  = resting->order_id;
@@ -288,7 +287,6 @@ void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) 
                 t.price         = bid_price;
                 t.quantity      = match_qty;
                 std::memcpy(t.symbol, incoming->symbol, 8);
-                trade_buf.push_trade(t);
 
                 if (resting->is_filled()) {
                     resting->status = OrderStatus::FILLED;
