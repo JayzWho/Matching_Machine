@@ -1,5 +1,4 @@
 #include "order_book.h"
-#include <chrono>
 #include <algorithm>
 
 namespace me {
@@ -19,8 +18,7 @@ std::vector<Trade> OrderBook::add_order(Order* order) {
 
     // 为订单打上入队时间戳（如果调用方没有设置）
     if (order->timestamp_ns == 0) {
-        order->timestamp_ns = static_cast<uint64_t>(
-            std::chrono::steady_clock::now().time_since_epoch().count());
+        order->timestamp_ns = LatencyRecorder::now();
     }
 
     // 注册到订单索引
