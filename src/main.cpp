@@ -13,8 +13,8 @@ int main() {
     engine.add_symbol("BTCUSD", 100'000'000);
 
     // 生成模拟行情数据（1000 条，20% 为撤单）
-    FeedSimulator feed("BTCUSD", 100'000'000, /*seed=*/42);
-    auto orders = feed.generate_random(1000, 0.2);
+    FeedSimulator feed("BTCUSD", 100'000'000, /*cancel_ratio=*/0.2, /*seed=*/42);
+    auto orders = feed.generate_random(1000);
 
     size_t total_trades = 0;
 

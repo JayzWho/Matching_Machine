@@ -263,8 +263,8 @@ BENCHMARK(BM_CancelOrder);
 // 并批量送入 OrderBook，测量平均每笔订单的处理吞吐量。
 static void BM_MixedWorkload(benchmark::State& state) {
     // 预生成订单（不计入 benchmark 时间）
-    FeedSimulator sim("BTCUSD", 100'000'000, /*seed=*/42);
-    auto orders = sim.generate_random(1000'000, /*cancel_ratio=*/0.1);
+    FeedSimulator sim("BTCUSD", 100'000'000, /*cancel_ratio=*/0.1, /*seed=*/42);
+    auto orders = sim.generate_random(1000'000);
 
     for (auto _ : state) {
         state.PauseTiming();

@@ -86,59 +86,36 @@ void MatchingEngine::producer_loop(std::string_view symbol,
                                    int64_t         base_price,
                                    size_t          order_count,
                                    double          cancel_ratio) {
-    FeedSimulator sim(symbol, base_price);
-    // 分批生成订单（避免一次性在堆上分配过多 vector<Order>）
-    constexpr size_t kBatchSize = 256;
+    FeedSimulator sim(symbol, base_price, cancel_ratio);
 
     size_t pushed = 0;
 
     while (pushed < order_count) {
-        // ① 先从归还队列回收已完成的 Order*，归还内存池
-        //    这必须在 allocate 之前，保证池有空闲槽位
-        {
+        // ① 自旋等待：从内存池拿到空闲槽位（期间持续回收归还队列防止死锁）
+        Order* slot = nullptr;
+        while (true) {
+            Order* ret = nullptr;
+            while (return_queue_.try_pop(ret)) {
+                order_pool_.deallocate(ret);
+            }
+            slot = order_pool_.allocate();
+            if (slot != nullptr) break;
+        }
+
+        // ② 直接在内存池槽位上生成订单字段，零拷贝
+        sim.generate_into(slot);
+        // 生产者写入 timestamp_ns（端到端延迟起点）
+        slot->timestamp_ns = LatencyRecorder::now();
+
+        // ③ 自旋直到 order_queue_ 有空位
+        while (!order_queue_.try_push(slot)) {
             Order* ret = nullptr;
             while (return_queue_.try_pop(ret)) {
                 order_pool_.deallocate(ret);
             }
         }
 
-        // ② 生成一批原始订单数据（使用 FeedSimulator，值语义）
-        const size_t remaining   = order_count - pushed;
-        const size_t batch_count = std::min(kBatchSize, remaining);
-        auto raw_orders = sim.generate_random(batch_count, cancel_ratio);
-
-        // ③ 从内存池分配 Order 对象，填充字段，推入 order_queue_
-        for (const auto& raw : raw_orders) {
-            // 自旋等待：内存池有空闲槽 + 队列有空位
-            Order* slot = nullptr;
-            while (true) {
-                // 先尝试回收归还队列（防止池满时死锁）
-                Order* ret = nullptr;
-                while (return_queue_.try_pop(ret)) {
-                    order_pool_.deallocate(ret);
-                }
-
-                slot = order_pool_.allocate();
-                if (slot != nullptr) break;
-                // 池满：自旋等待消费者归还
-            }
-
-            // 将原始数据复制到内存池槽位
-            *slot = raw;
-            // 生产者写入 timestamp_ns（端到端延迟起点）
-            slot->timestamp_ns = LatencyRecorder::now();
-
-            // 自旋直到 order_queue_ 有空位
-            while (!order_queue_.try_push(slot)) {
-                // 队列满时继续回收归还队列，避免生产者饥饿
-                Order* ret = nullptr;
-                while (return_queue_.try_pop(ret)) {
-                    order_pool_.deallocate(ret);
-                }
-            }
-
-            ++pushed;
-        }
+        ++pushed;
     }
 
     // ── 阶段二：生产任务结束，通知消费者，进入纯回收模式 ──────────────────────
