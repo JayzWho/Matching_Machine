@@ -65,12 +65,12 @@ bool OrderBook::cancel_order(uint64_t order_id) {
                 break;
             }
         }
-        // 检查有效元素是否全部为空洞：从 head 扫描找第一个非 null
-        bool all_null = true;
-        for (size_t i = level.head; i < vec.size(); ++i) {
-            if (vec[i] != nullptr) { all_null = false; break; }
-        }
-        if (all_null) levels.erase(level_it);
+        // O(1)* 检查：从 head 向后跳过空洞，若无有效订单则清除档位。
+        // 不能用 level.empty()（它只判断游标，不感知 nullptr 空洞）。
+        // 此处最多扫描到第一个非 null 元素，均摊代价极低（撤单是低频操作）。
+        while (level.head < vec.size() && vec[level.head] == nullptr)
+            ++level.head;
+        if (level.head >= vec.size()) levels.erase(level_it);
     };
 
     if (order->side == Side::BUY) {
