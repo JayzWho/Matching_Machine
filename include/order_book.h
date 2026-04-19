@@ -10,9 +10,9 @@
 #include <string_view>
 #include <cstddef>
 #include <algorithm>
-#include <chrono>
 #include <cstring>
 #include "absl/container/flat_hash_map.h"
+#include "latency_recorder.h"
 
 namespace me {
 
@@ -182,8 +182,7 @@ void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf)
     if (!order) return;
 
     if (order->timestamp_ns == 0) {
-        order->timestamp_ns = static_cast<uint64_t>(
-            std::chrono::steady_clock::now().time_since_epoch().count());
+        order->timestamp_ns = LatencyRecorder::now();
     }
 
     if (order->type == OrderType::CANCEL) {

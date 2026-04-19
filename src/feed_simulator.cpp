@@ -1,5 +1,4 @@
 #include "feed_simulator.h"
-#include <chrono>
 #include <sstream>
 #include <stdexcept>
 
@@ -68,8 +67,7 @@ void FeedSimulator::generate_into(Order* slot) {
 Order FeedSimulator::make_random_order(bool is_cancel) {
     Order o{};
     o.order_id     = next_order_id_++;
-    o.timestamp_ns = static_cast<uint64_t>(
-        std::chrono::steady_clock::now().time_since_epoch().count());
+    o.timestamp_ns = 0;  // 由调用方（producer_loop）用 RDTSC 覆盖
     o.side         = side_dist_(rng_) ? Side::BUY : Side::SELL;
     o.quantity     = qty_dist_(rng_);
     std::strncpy(o.symbol, symbol_.c_str(), 7);
