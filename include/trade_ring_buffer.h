@@ -55,6 +55,27 @@ public:
     }
 
     /**
+     * @brief 分配下一个写入槽位并返回其引用（零拷贝写入接口）
+     *
+     * 调用方直接在返回的引用上填写字段，Trade 直接构造在预分配数组内，
+     * 省去临时对象的构造与拷贝。
+     *
+     * 使用方式：
+     *   Trade& t = trade_buf.alloc_slot();
+     *   t.trade_id = ...; t.price = ...;
+     *
+     * 缓冲区满时覆盖最旧的记录（与 push_trade 语义一致）。
+     * 注意：调用后槽位立即计入 size()，调用方须在下次 alloc_slot() 前完成字段填写。
+     */
+    [[nodiscard]] Trade& alloc_slot() noexcept {
+        Trade& slot = buffer_[write_pos_ & mask_];
+        ++write_pos_;
+        if (count_ < Capacity) ++count_;
+        ++total_written_;
+        return slot;
+    }
+
+    /**
      * @brief 批量消费所有已写入的 Trade（模拟下游处理）
      *
      * 按写入顺序依次调用 fn(const Trade&)，完成后清空缓冲区。
