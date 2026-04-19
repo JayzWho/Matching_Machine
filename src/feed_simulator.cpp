@@ -7,24 +7,23 @@ namespace me {
 
 FeedSimulator::FeedSimulator(std::string_view symbol,
                              int64_t          base_price,
+                             double           cancel_ratio,
                              uint64_t         seed)
     : symbol_(symbol)
     , base_price_(base_price)
     , rng_(seed)
-    // 价格在基准价 ±0.5% 范围内正态波动
     , price_dist_(0.0, static_cast<double>(base_price) * 0.005)
     , qty_dist_(1, 100)
     , side_dist_(0.5)
+    , cancel_dist_(cancel_ratio)
 {}
 
-std::vector<Order> FeedSimulator::generate_random(size_t count, double cancel_ratio) {
+std::vector<Order> FeedSimulator::generate_random(size_t count) {
     std::vector<Order> orders;
     orders.reserve(count);
 
-    std::bernoulli_distribution cancel_dist(cancel_ratio);
-
     for (size_t i = 0; i < count; ++i) {
-        bool is_cancel = cancel_dist(rng_) && (next_order_id_ > 1);
+        bool is_cancel = cancel_dist_(rng_) && (next_order_id_ > 1);
         orders.push_back(make_random_order(is_cancel));
     }
     return orders;
@@ -59,6 +58,11 @@ std::vector<Order> FeedSimulator::load_csv(const std::string& filepath) {
         orders.push_back(o);
     }
     return orders;
+}
+
+void FeedSimulator::generate_into(Order* slot) {
+    bool is_cancel = cancel_dist_(rng_) && (next_order_id_ > 1);
+    *slot = make_random_order(is_cancel);
 }
 
 Order FeedSimulator::make_random_order(bool is_cancel) {

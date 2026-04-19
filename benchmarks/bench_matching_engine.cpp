@@ -112,8 +112,8 @@ static void BM_SingleThread_Baseline(benchmark::State& state) {
     constexpr size_t kBatchSize  = 10'000;
     constexpr double kCancelRatio = 0.2;
 
-    FeedSimulator sim("BTCUSD", 100'000'000LL);
-    auto orders = sim.generate_random(kBatchSize, kCancelRatio);
+    FeedSimulator sim("BTCUSD", 100'000'000LL, /*cancel_ratio=*/kCancelRatio);
+    auto orders = sim.generate_random(kBatchSize);
 
     // 将值语义的 Order 放入内存池（模拟 MemoryPool 路径）
     // 此处为简化，直接用 vector<Order> 的地址

@@ -28,12 +28,15 @@ public:
      */
     FeedSimulator(std::string_view symbol,
                   int64_t          base_price,
-                  uint64_t         seed = 42);
+                  double           cancel_ratio = 0.2,
+                  uint64_t         seed         = 42);
 
     /// 随机生成一批订单（用于压测）
-    /// @param count 生成数量
-    /// @param cancel_ratio 撤单比例 [0.0, 1.0]
-    std::vector<Order> generate_random(size_t count, double cancel_ratio = 0.2);
+    std::vector<Order> generate_random(size_t count);
+
+    /// 零拷贝接口：直接将随机订单字段写入调用方提供的槽位（已从内存池 allocate 的指针）
+    /// 避免构造临时 Order 再拷贝，适合 producer_loop 热路径使用
+    void generate_into(Order* slot);
 
     /// 从 CSV 文件加载订单序列
     /// CSV 格式：order_id,side,price,qty,type
@@ -51,6 +54,7 @@ private:
     std::normal_distribution<double>   price_dist_;   // 价格围绕 base_price 正态分布
     std::uniform_int_distribution<int> qty_dist_;     // 数量 [1, 100]
     std::bernoulli_distribution        side_dist_;    // 50% BUY / 50% SELL
+    std::bernoulli_distribution        cancel_dist_;  // 撤单概率
 };
 
 } // namespace me
