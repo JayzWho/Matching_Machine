@@ -174,7 +174,7 @@ TEST(OrderBookNoallocTest, NoMatch_NoTradeInBuffer) {
     OrderBook book("BTCUSD");
 
     Order buy = make_order(1, Side::BUY, 99'000'000, 10);
-    book.add_order_noalloc(&buy, buf);
+    book.add_order_noalloc(&buy, buf, [](Order*) {});
 
     EXPECT_TRUE(buf.empty());   // 无对手单，无成交
     EXPECT_EQ(buy.filled_qty, 0);
@@ -185,11 +185,11 @@ TEST(OrderBookNoallocTest, FullMatch_TradeInBuffer) {
     OrderBook book("BTCUSD");
 
     Order sell = make_order(1, Side::SELL, 100'000'000, 10);
-    book.add_order_noalloc(&sell, buf);
+    book.add_order_noalloc(&sell, buf, [](Order*) {});
     EXPECT_TRUE(buf.empty());   // 卖单先挂，无对手
 
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
-    book.add_order_noalloc(&buy, buf);
+    book.add_order_noalloc(&buy, buf, [](Order*) {});
 
     ASSERT_EQ(buf.size(), 1u);
     EXPECT_EQ(buf[0].quantity, 10);
@@ -202,18 +202,18 @@ TEST(OrderBookNoallocTest, DeallocateCallback_CalledForRestingOrder) {
     TradeRingBuffer<64> buf;
     OrderBook book("BTCUSD");
 
-    // 注册归还回调，记录被回调的 Order*
+    // 记录被归还的 Order*
     std::vector<Order*> deallocated;
-    book.set_deallocate_cb([&](Order* o) { deallocated.push_back(o); });
+    auto deallocator = [&](Order* o) { deallocated.push_back(o); };
 
     Order sell = make_order(1, Side::SELL, 100'000'000, 10);
-    book.add_order_noalloc(&sell, buf);
+    book.add_order_noalloc(&sell, buf, deallocator);
     EXPECT_TRUE(deallocated.empty());  // 卖单挂单，未被成交，不触发回调
 
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
-    book.add_order_noalloc(&buy, buf);
+    book.add_order_noalloc(&buy, buf, deallocator);
 
-    // deallocate_cb_ 语义：归还所有"处理完毕"的 Order
+    // deallocator 语义：归还所有"处理完毕"的 Order
     // sell（挂单方）被完全成交 → 触发归还；buy（incoming FILLED）→ 同样触发归还
     ASSERT_EQ(deallocated.size(), 2u);
     // 顺序：match_noalloc 先归还 resting(sell)，add_order_noalloc 末尾再归还 incoming(buy)
@@ -226,15 +226,15 @@ TEST(OrderBookNoallocTest, PartialMatch_DeallocateNotCalledForPartialResting) {
     OrderBook book("BTCUSD");
 
     std::vector<Order*> deallocated;
-    book.set_deallocate_cb([&](Order* o) { deallocated.push_back(o); });
+    auto deallocator = [&](Order* o) { deallocated.push_back(o); };
 
     // 挂一个大卖单（qty=20）
     Order sell = make_order(1, Side::SELL, 100'000'000, 20);
-    book.add_order_noalloc(&sell, buf);
+    book.add_order_noalloc(&sell, buf, deallocator);
 
     // 买单只买 10：buy FILLED，sell 部分成交仍留在 PriceLevel
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
-    book.add_order_noalloc(&buy, buf);
+    book.add_order_noalloc(&buy, buf, deallocator);
 
     EXPECT_EQ(buf.size(), 1u);          // 1 笔成交
     // buy 完全成交应被归还；sell 仍有剩余不归还

@@ -190,8 +190,9 @@ TEST_F(OrderBookTest, TradeRecordedInRingBuffer) {
 
     auto buy  = make_order(Side::BUY,  100'000'000, 10);
     auto sell = make_order(Side::SELL, 100'000'000, 10);
-    book->add_order_noalloc(&buy,  trade_buf);
-    book->add_order_noalloc(&sell, trade_buf);
+    auto noop = [](Order*) {};
+    book->add_order_noalloc(&buy,  trade_buf, noop);
+    book->add_order_noalloc(&sell, trade_buf, noop);
 
     EXPECT_EQ(trade_buf.size(), 1u);
     EXPECT_EQ(trade_buf[0].quantity, 10);

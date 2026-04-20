@@ -130,7 +130,7 @@ static void BM_SingleThread_Baseline(benchmark::State& state) {
         state.ResumeTiming();
 
         for (auto& o : orders) {
-            book.add_order_noalloc(&o, trade_buf);
+            book.add_order_noalloc(&o, trade_buf, [](Order*) {});
         }
 
         benchmark::DoNotOptimize(trade_buf.size());

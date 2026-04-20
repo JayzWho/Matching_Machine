@@ -152,14 +152,14 @@ void MatchingEngine::consumer_loop(std::string_view symbol) {
     // 初始化消费者侧的 OrderBook
     OrderBook book(symbol);
 
-    // 注册归还回调：挂单方被完全成交后，将其推入 return_queue_
-    // 注意：return_queue_ 的 producer 是消费者线程（反向通道）
-    book.set_deallocate_cb([this](Order* o) {
+    // 归还 lambda：挂单方被完全成交后，将其推入 return_queue_
+    // 编译期静态绑定，无 std::function 间接调用开销
+    auto deallocator = [this](Order* o) {
         // 自旋等待归还队列有空位（极低概率满）
         while (!return_queue_.try_push(o)) {
             // 如果这里阻塞，说明生产者回收过慢（扩大 kReturnQueueCap 可缓解）
         }
-    });
+    };
 
     while (true) {
         Order* order = nullptr;
@@ -167,12 +167,12 @@ void MatchingEngine::consumer_loop(std::string_view symbol) {
         if (order_queue_.try_pop(order)) {
             const uint64_t t_start = order->timestamp_ns;
 
-            book.add_order_noalloc(order, trade_buf_);
+            book.add_order_noalloc(order, trade_buf_, deallocator);
 
             const uint64_t latency = LatencyRecorder::now() - t_start;
             latency_recorder_.record(latency);
 
-            // 归还由 add_order_noalloc 内部的 deallocate_cb_ 统一负责：
+            // 归还由 add_order_noalloc 内部的 deallocator 统一负责：
             //   FILLED incoming 和 CANCEL 均在那里归还；挂单留在 PriceLevel 中
 
             consumed_count_.fetch_add(1, std::memory_order_relaxed);
@@ -183,13 +183,13 @@ void MatchingEngine::consumer_loop(std::string_view symbol) {
                 // 再做一次 try_pop，避免 TOCTOU（生产者在设 done 前最后推入的订单）
                 if (!order_queue_.try_pop(order)) {
                     // 真正排空：先设 consumer_done_，再退出
-                    // 此处所有 add_order_noalloc 和 deallocate_cb_ 均已完成
+                    // 此处所有 add_order_noalloc 和 deallocator 均已完成
                     consumer_done_.store(true, std::memory_order_release);
                     break;
                 }
                 // 处理最后一条
                 const uint64_t t_start = order->timestamp_ns;
-                book.add_order_noalloc(order, trade_buf_);
+                book.add_order_noalloc(order, trade_buf_, deallocator);
                 const uint64_t latency = LatencyRecorder::now() - t_start;
                 latency_recorder_.record(latency);
                 // 归还同样由 add_order_noalloc 内部统一处理
