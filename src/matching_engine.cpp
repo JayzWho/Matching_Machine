@@ -55,6 +55,7 @@ void MatchingEngine::start(std::string_view symbol,
     consumer_done_.store(false, std::memory_order_relaxed);
     consumed_count_.store(0, std::memory_order_relaxed);
     latency_recorder_.reset();
+    trade_buf_.drain([](const Trade&) {});  // 清空上轮残留的成交记录
     running_.store(true, std::memory_order_release);
 
     // 启动两个线程（先消费者，再生产者，避免生产者推入时消费者未就绪）
