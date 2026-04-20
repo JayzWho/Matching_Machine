@@ -4,7 +4,6 @@
 #include "trade_ring_buffer.h"
 #include <map>
 #include <vector>
-#include <functional>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -15,10 +14,6 @@
 #include "latency_recorder.h"
 
 namespace me {
-
-/// 内存池归还回调：由 MatchingEngine 注入，用于通知外部归还已成交的挂单对象
-/// 消费者线程独占调用（通过 OrderBook 的成交逻辑触发），无需线程安全
-using DeallocateCallback = std::function<void(Order*)>;
 
 /// TradeRingBuffer 容量常量（供 OrderBook 接口模板参数使用）
 inline constexpr size_t kTradeBufCap = 4096;
@@ -66,27 +61,19 @@ public:
      *
      * 与 add_order 逻辑完全相同，区别在于：
      *   - 成交结果直接写入外部 TradeRingBuffer，不构造 std::vector<Trade>
-     *   - 当挂单方订单被完全成交时，通过 deallocate_cb_ 通知外部归还内存池
+     *   - 当挂单方订单被完全成交时，调用 deallocator(Order*) 通知外部归还内存池
      *
-     * 热路径全程无堆分配。调用方（MatchingEngine）须在调用前通过
-     * set_deallocate_cb() 注册归还回调，否则挂单方 Order 不会被归还。
+     * 热路径全程无堆分配，Deallocator 在编译期内联，无间接调用开销。
      *
-     * @tparam Cap  TradeRingBuffer 的容量（模板参数，允许测试使用小容量）
-     * @param order     新到达订单的指针
-     * @param trade_buf 成交结果写入的环形缓冲区（消费者线程独占）
+     * @tparam Cap         TradeRingBuffer 的容量（允许测试使用小容量）
+     * @tparam Deallocator callable 类型，签名 void(Order*)，用于归还处理完毕的 Order
+     * @param order       新到达订单的指针
+     * @param trade_buf   成交结果写入的环形缓冲区（消费者线程独占）
+     * @param deallocator 归还回调（通常为 lambda，编译期静态绑定）
      */
-    template<size_t Cap>
-    void add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf);
-
-    /**
-     * @brief 注册 Order 归还回调
-     *
-     * 每当 match_noalloc 消耗掉一个挂单方 Order（完全成交），就调用此回调。
-     * 回调通常是将 Order* 推入归还队列，由生产者线程负责调用 pool.deallocate()。
-     *
-     * @param cb  callable，签名：void(Order*)
-     */
-    void set_deallocate_cb(DeallocateCallback cb) { deallocate_cb_ = std::move(cb); }
+    template<size_t Cap, typename Deallocator>
+    void add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf,
+                           const Deallocator& deallocator);
 
     /**
      * @brief 撤销订单
@@ -115,9 +102,10 @@ private:
     /// 内部撮合逻辑（返回 vector 版本，供旧接口使用）
     std::vector<Trade> match(Order* incoming);
 
-    /// 无堆分配撮合逻辑（模板版本，成交直接写入 trade_buf，挂单方成交后触发 deallocate_cb_）
-    template<size_t Cap>
-    void match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf);
+    /// 无堆分配撮合逻辑（模板版本，成交直接写入 trade_buf，挂单方成交后调用 deallocator）
+    template<size_t Cap, typename Deallocator>
+    void match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf,
+                       const Deallocator& deallocator);
 
     std::string symbol_;
 
@@ -171,14 +159,14 @@ private:
     // reserve(65536) 避免高频插入触发 rehash
     absl::flat_hash_map<uint64_t, Order*> order_index_;
 
-    DeallocateCallback deallocate_cb_;   ///< 挂单方成交后的 Order 归还回调（可选）
     uint64_t           trade_id_counter_ = 0;
 };
 
 // ── 模板函数实现（必须在头文件内） ───────────────────────────────────────────
 
-template<size_t Cap>
-void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf) {
+template<size_t Cap, typename Deallocator>
+void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf,
+                                  const Deallocator& deallocator) {
     if (!order) return;
 
     if (order->timestamp_ns == 0) {
@@ -187,12 +175,12 @@ void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf)
 
     if (order->type == OrderType::CANCEL) {
         cancel_order(order->order_id);
-        if (deallocate_cb_) deallocate_cb_(order);
+        deallocator(order);
         return;
     }
 
     order_index_[order->order_id] = order;
-    match_noalloc(order, trade_buf);
+    match_noalloc(order, trade_buf, deallocator);
 
     if (!order->is_filled() && order->type == OrderType::LIMIT) {
         if (order->side == Side::BUY) {
@@ -202,17 +190,18 @@ void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf)
         }
     }
 
-    // deallocate_cb_ 统一负责归还所有"处理完毕"的 Order：
+    // deallocator 统一负责归还所有"处理完毕"的 Order：
     //   - FILLED incoming  → 在此归还
     //   - CANCEL incoming  → 上方 early-return 处已归还
     //   - 挂单（PARTIAL/NEW）→ 留在 PriceLevel，由 match_noalloc 在其被后续成交时归还
-    if (order->is_filled() && deallocate_cb_) {
-        deallocate_cb_(order);
+    if (order->is_filled()) {
+        deallocator(order);
     }
 }
 
-template<size_t Cap>
-void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) {
+template<size_t Cap, typename Deallocator>
+void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf,
+                               const Deallocator& deallocator) {
     if (incoming->side == Side::BUY) {
         while (!incoming->is_filled() && !ask_levels_.empty()) {
             auto& [ask_price, ask_level] = *ask_levels_.begin();
@@ -245,7 +234,7 @@ void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) 
                     resting->status = OrderStatus::FILLED;
                     order_index_.erase(resting->order_id);
                     ask_level.pop_front();
-                    if (deallocate_cb_) deallocate_cb_(resting);
+                    deallocator(resting);
                 } else {
                     resting->status = OrderStatus::PARTIAL;
                 }
@@ -291,7 +280,7 @@ void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf) 
                     resting->status = OrderStatus::FILLED;
                     order_index_.erase(resting->order_id);
                     bid_level.pop_front();
-                    if (deallocate_cb_) deallocate_cb_(resting);
+                    deallocator(resting);
                 } else {
                     resting->status = OrderStatus::PARTIAL;
                 }
