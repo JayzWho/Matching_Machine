@@ -1,5 +1,7 @@
 # Low-Latency Matching Engine (C++20)
 
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+
 A high-performance exchange matching engine built in C++20, featuring a lock-free SPSC pipeline,
 custom memory pool, and end-to-end RDTSC latency measurement. Designed to demonstrate
 low-latency systems programming techniques applicable to HFT and quantitative trading infrastructure.
