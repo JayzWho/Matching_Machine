@@ -1,3 +1,4 @@
+# Build outputs
 build/
 cmake-build-*/
 .cmake/
@@ -6,11 +7,31 @@ CMakeCache.txt
 *.a
 *.so
 *.o
-compile_commands.json
 .cache/
 
-# Benchmark results and learning notes (local only, not version-controlled)
-results/
-learning_notes/
+# Compiler and IDE files
+compile_commands.json
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 
-.codebuddy
+# Personal and sensitive materials
+learning_notes/private/
+
+# Benchmark results (keep only selected baseline files)
+results/
+
+# CodeBuddy workspace data
+.codebuddy/
+
+# Temporary files
+.DS_Store
+Thumbs.db
+*.log
+
+# Temporary docs
+docs/private/
+
+data/
