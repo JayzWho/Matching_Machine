@@ -93,11 +93,13 @@ endforeach()
 add_executable(bench_order_book       benchmarks/bench_order_book.cpp)
 add_executable(bench_spsc_ring_buffer benchmarks/bench_spsc_ring_buffer.cpp)
 add_executable(bench_matching_engine  benchmarks/bench_matching_engine.cpp)
+add_executable(bench_baseline_mutex   benchmarks/bench_baseline_mutex.cpp)
 
 foreach(bench_target
     bench_order_book
     bench_spsc_ring_buffer
-    bench_matching_engine)
+    bench_matching_engine
+    bench_baseline_mutex)
   target_link_libraries(${bench_target} PRIVATE
     matching_engine_lib
     benchmark::benchmark_main
