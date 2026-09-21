@@ -1,0 +1,160 @@
+{
+  "context": {
+    "date": "2026-04-08T23:05:57+08:00",
+    "host_name": "VM-0-3-ubuntu",
+    "executable": "./build/release/bench_order_book",
+    "num_cpus": 2,
+    "mhz_per_cpu": 2494,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 4194304,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 37486592,
+        "num_sharing": 2
+      }
+    ],
+    "load_avg": [0.333496,0.285156,1.56641],
+    "library_build_type": "release"
+  },
+  "benchmarks": [
+    {
+      "name": "BM_AddOrder_NoMatch/iterations:100000",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "BM_AddOrder_NoMatch/iterations:100000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 100000,
+      "real_time": 2.7718108845874667e+02,
+      "cpu_time": 2.4343737999999999e+02,
+      "time_unit": "ns",
+      "items_per_second": 4.1078325769033497e+06
+    },
+    {
+      "name": "BM_AddOrder_FullMatch/iterations:100000",
+      "family_index": 1,
+      "per_family_instance_index": 0,
+      "run_name": "BM_AddOrder_FullMatch/iterations:100000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 100000,
+      "real_time": 2.7585676172748208e+02,
+      "cpu_time": 2.7541099000000003e+02,
+      "time_unit": "ns",
+      "items_per_second": 3.6309371677579023e+06
+    },
+    {
+      "name": "BM_AddOrder_SweepLevels/1",
+      "family_index": 2,
+      "per_family_instance_index": 0,
+      "run_name": "BM_AddOrder_SweepLevels/1",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 48561,
+      "real_time": 1.2824502917325088e+04,
+      "cpu_time": 1.2776133934638368e+04,
+      "time_unit": "ns",
+      "items_per_second": 7.8270939011434617e+04
+    },
+    {
+      "name": "BM_AddOrder_SweepLevels/5",
+      "family_index": 2,
+      "per_family_instance_index": 1,
+      "run_name": "BM_AddOrder_SweepLevels/5",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 56876,
+      "real_time": 1.1020725655783870e+04,
+      "cpu_time": 1.1040322754763018e+04,
+      "time_unit": "ns",
+      "items_per_second": 9.0577062121538067e+04
+    },
+    {
+      "name": "BM_AddOrder_SweepLevels/10",
+      "family_index": 2,
+      "per_family_instance_index": 2,
+      "run_name": "BM_AddOrder_SweepLevels/10",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 61726,
+      "real_time": 1.2153268819678169e+04,
+      "cpu_time": 1.2141067313612324e+04,
+      "time_unit": "ns",
+      "items_per_second": 8.2365081600265883e+04
+    },
+    {
+      "name": "BM_AddOrder_SweepLevels/20",
+      "family_index": 2,
+      "per_family_instance_index": 3,
+      "run_name": "BM_AddOrder_SweepLevels/20",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 55270,
+      "real_time": 1.1825087243161646e+04,
+      "cpu_time": 1.1843155020809154e+04,
+      "time_unit": "ns",
+      "items_per_second": 8.4436959428711198e+04
+    },
+    {
+      "name": "BM_CancelOrder/iterations:50000",
+      "family_index": 3,
+      "per_family_instance_index": 0,
+      "run_name": "BM_CancelOrder/iterations:50000",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 50000,
+      "real_time": 9.0239928965456784e+05,
+      "cpu_time": 5.6793964736002765e+05,
+      "time_unit": "ns",
+      "items_per_second": 1.7607504682026206e+03
+    },
+    {
+      "name": "BM_MixedWorkload/iterations:20",
+      "family_index": 4,
+      "per_family_instance_index": 0,
+      "run_name": "BM_MixedWorkload/iterations:20",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 20,
+      "real_time": 3.4991553879808635e+07,
+      "cpu_time": 1.7390542750000291e+07,
+      "time_unit": "ns",
+      "items_per_second": 5.7502518143085735e+06
+    }
+  ]
+}
