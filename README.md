@@ -129,6 +129,15 @@ pool.allocate()
 
 ## 4. Performance & Results
 
+> ⚠️ **Audit notice (2026-09-20)**
+>
+> The data in this section was collected on a now-decommissioned Tencent Cloud VM and is
+> no longer reproducible. The benchmark methodology is currently under audit, and several
+> measurement issues have been confirmed, including failure to separate queueing delay
+> from service latency, cross-iteration state contamination in some microbenchmarks, and
+> incorrect timing-region boundaries. See [`docs/AUDIT.md`](docs/AUDIT.md) for details.
+> A corrected bare-metal re-benchmark is currently in progress.
+
 > **Test environment**: Tencent Cloud Ubuntu VM, 2 vCPU @ 2494 MHz, Release (-O2)  
 > **Run command**: `taskset -c 0,1 ./build/release/bench_matching_engine`  
 > **Note**: Hardware PMU counters (cycles, IPC, cache-miss) unavailable in virtualized environment.
@@ -256,6 +265,8 @@ Matching_Machine/
 │   ├── test_memory_pool.cpp
 │   └── test_matching_engine.cpp
 ├── docs/
+│   ├── AUDIT.md                   # Benchmark methodology audit — read before citing §4
+│   ├── evidence/                  # Archived raw benchmark output (historical VM era)
 │   └── snapshots/                 # Pre-optimization snapshots for diff reference
 └── CMakeLists.txt
 ```
