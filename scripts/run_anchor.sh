@@ -58,21 +58,44 @@ for b in bench_order_book bench_spsc_ring_buffer bench_matching_engine bench_bas
     [ -x "$BUILD_DIR/$b" ] || die "missing $BUILD_DIR/$b — build Release first"
 done
 
-# Two distinct physical cores: in measurement mode SMT siblings are offline, so
-# the lowest two online CPUs are on different cores. Derived, never hardcoded.
-mapfile -t ONLINE < <(
-    for d in /sys/devices/system/cpu/cpu[0-9]*; do
-        id="${d##*/cpu}"
-        if [ ! -e "$d/online" ] || [ "$(cat "$d/online" 2>/dev/null)" = "1" ]; then echo "$id"; fi
-    done | sort -n
-)
-[ "${#ONLINE[@]}" -ge 2 ] || die "need at least 2 online CPUs"
-CPU_SOLO="${ONLINE[0]}"
-CPU_PAIR="${ONLINE[0]},${ONLINE[1]}"
+# Measurement cores. In measurement mode they were chosen by bench_env.sh
+# setup, which also steered device interrupts off them, so they are read back
+# from its saved state rather than recomputed. Outside measurement mode the
+# same ranking is computed live. Never "the lowest two online CPUs": on this
+# machine cpu0 is the effective ACPI interrupt target and throttles far more
+# than any other core. See the header of scripts/bench_env.sh.
+MEASURE="$(./scripts/bench_env.sh cores --list)"
+CORE_RATIONALE="$(./scripts/bench_env.sh cores --rationale)"
+IFS=',' read -r -a MEASURE_ARR <<< "$MEASURE"
+[ "${#MEASURE_ARR[@]}" -eq 2 ] || die "could not determine two measurement cores (got '$MEASURE')"
+for c in "${MEASURE_ARR[@]}"; do
+    if [ -e "/sys/devices/system/cpu/cpu$c/online" ] && [ "$(cat "/sys/devices/system/cpu/cpu$c/online")" != "1" ]; then
+        die "measurement core cpu$c is offline"
+    fi
+done
+CPU_SOLO="${MEASURE_ARR[0]}"                                   # best-ranked core
+CPU_PAIR="$(printf '%s\n' "${MEASURE_ARR[@]}" | sort -n | paste -sd, -)"
 
+# Device (numbered) interrupts delivered to one CPU so far. Columns are mapped
+# from the /proc/interrupts header because offline CPUs have no column.
+device_irqs_on() {
+    awk -v want="$1" '
+        NR == 1 { for (i = 1; i <= NF; i++) { c = $i; sub(/^CPU/, "", c); if (c == want) col = i } next }
+        col && $1 ~ /^[0-9]+:$/ { v = $(col + 1); if (v ~ /^[0-9]+$/) s += v }
+        END { print s + 0 }' /proc/interrupts
+}
+
+# Provenance: the binaries must be built from exactly this commit. Only changes
+# to build inputs make a tree "dirty" for this purpose; an unrelated local edit
+# (e.g. .gitignore) must not mark an otherwise faithful run as untrustworthy.
 GIT_SHA="$(git rev-parse --short HEAD)"
 GIT_DIRTY=""
-[ -n "$(git status --porcelain)" ] && GIT_DIRTY="-dirty"
+[ -n "$(git status --porcelain -- CMakeLists.txt src include benchmarks tests)" ] && GIT_DIRTY="-dirty"
+
+# Rebuild so the binaries are guaranteed to match the tree being recorded.
+# Incremental: a no-op when already up to date.
+echo "[*] ensuring Release binaries match the working tree..."
+cmake --build "$BUILD_DIR" -j"$(nproc)" >/dev/null || die "Release build failed"
 CPU_TAG="$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //; s/(R)//g; s/(TM)//g; s/ CPU.*//; s/ @.*//; s/ \+/-/g; s/^-//')"
 STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
 
@@ -88,6 +111,7 @@ echo "  pinned       : $([ "$PINNED" = 1 ] && echo yes || echo 'NO — INVALID')
 echo "  repetitions  : $REPETITIONS"
 echo "  single-thread: taskset -c $CPU_SOLO"
 echo "  two-thread   : taskset -c $CPU_PAIR"
+echo "  core ranking : $CORE_RATIONALE"
 echo "  output       : $OUT"
 echo "=============================================================="
 
@@ -95,6 +119,8 @@ echo "=============================================================="
 ./scripts/bench_env.sh throttle > "$OUT/throttle_before.txt"
 THR_CORE_BEFORE="$(grep -oP 'SUM  core=\K[0-9]+' "$OUT/throttle_before.txt")"
 THR_PKG_BEFORE="$(grep -oP 'PKG  package=\K[0-9]+' "$OUT/throttle_before.txt")"
+IRQ_BEFORE_SOLO="$(device_irqs_on "${MEASURE_ARR[0]}")"
+IRQ_BEFORE_OTHER="$(device_irqs_on "${MEASURE_ARR[1]}")"
 
 # ── warm-up ──────────────────────────────────────────────────────────────────
 # Discarded. Brings caches, branch predictors and — more importantly — the
@@ -133,6 +159,9 @@ echo
 ./scripts/capture_env.sh "$OUT/env_after.json" "$BUILD_DIR" >/dev/null
 THR_CORE_AFTER="$(grep -oP 'SUM  core=\K[0-9]+' "$OUT/throttle_after.txt")"
 THR_PKG_AFTER="$(grep -oP 'PKG  package=\K[0-9]+' "$OUT/throttle_after.txt")"
+D_IRQ_SOLO=$(( $(device_irqs_on "${MEASURE_ARR[0]}") - IRQ_BEFORE_SOLO ))
+D_IRQ_OTHER=$(( $(device_irqs_on "${MEASURE_ARR[1]}") - IRQ_BEFORE_OTHER ))
+IRQ_SUMMARY="cpu${MEASURE_ARR[0]} +${D_IRQ_SOLO}, cpu${MEASURE_ARR[1]} +${D_IRQ_OTHER}"
 D_CORE=$((THR_CORE_AFTER - THR_CORE_BEFORE))
 D_PKG=$((THR_PKG_AFTER - THR_PKG_BEFORE))
 
@@ -144,7 +173,7 @@ fi
 if [ "$D_CORE" -ne 0 ] || [ "$D_PKG" -ne 0 ]; then
     VERDICT="INVALID"; REASONS="${REASONS}- Thermal throttling occurred during the run (core +$D_CORE, package +$D_PKG).\n"
 fi
-[ -n "$GIT_DIRTY" ] && REASONS="${REASONS}- Working tree was dirty; the binaries may not match commit $GIT_SHA.\n"
+[ -n "$GIT_DIRTY" ] && REASONS="${REASONS}- Build inputs had uncommitted changes; the binaries do not correspond to commit $GIT_SHA alone.\n"
 
 {
 echo "# Anchor measurement — $LABEL"
@@ -191,12 +220,17 @@ echo "- repetitions: $REPETITIONS"
 echo "- single-thread affinity: \`taskset -c $CPU_SOLO\`"
 echo "- two-thread affinity: \`taskset -c $CPU_PAIR\`"
 echo "- throttle delta: core +$D_CORE, package +$D_PKG"
+echo "- core selection ranking (best first): $CORE_RATIONALE"
+echo "- device IRQs delivered to measurement cores during the run: $IRQ_SUMMARY"
+echo "  (informational: bench_env.sh steers movable IRQs away; kernel-managed or"
+echo "  per-cpu IRQs cannot be moved and may still fire here)"
 echo "- environment: see \`env_before.json\` / \`env_after.json\`"
 } > "$OUT/RESULT.md"
 
 echo "=============================================================="
 echo "  verdict       : $VERDICT"
 echo "  throttle delta: core +$D_CORE  package +$D_PKG"
+echo "  device IRQs on measurement cores: $IRQ_SUMMARY"
 echo "  output        : $OUT"
 echo "=============================================================="
 [ "$DRY_RUN" = "1" ] && { echo "[i] dry run — output discarded at $OUT"; }
