@@ -131,9 +131,13 @@ ABSL_SOURCE="system"
 
 CPU_MODEL="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
 ONLINE="$(online_cpus | tr '\n' ',' | sed 's/,$//')"
+# NOTE: under `set -e`, a command substitution whose loop ends on a failing
+# `[ ... ] && ...` aborts the script. That is exactly what happened with an
+# offline last CPU (empty topology), so conditionals inside these loops use
+# if/fi and never leave a non-zero status behind.
 SIBLINGS="$(for d in "$CPU_DIR"/cpu[0-9]*; do
     id="${d##*/cpu}"; l="$(rd "$d/topology/thread_siblings_list")"
-    [ -n "$l" ] && printf '%s=%s;' "$id" "$l"; done)"
+    if [ -n "$l" ]; then printf '%s=%s;' "$id" "$l"; fi; done)"
 GOVERNOR="$(rd "$CPU_DIR/cpu0/cpufreq/scaling_governor")"
 DRIVER="$(rd "$CPU_DIR/cpu0/cpufreq/scaling_driver")"
 NO_TURBO="$(rd "$CPU_DIR/intel_pstate/no_turbo")"
@@ -144,7 +148,7 @@ FREQ_MHZ="$(for c in $(online_cpus); do
 
 TEMPS="$(for z in /sys/class/thermal/thermal_zone*/; do
     t="$(rd "$z/type")"; v="$(rd "$z/temp")"
-    [ -n "$v" ] && printf '%s:%s;' "$t" "$((v/1000))"; done)"
+    if [ -n "$v" ]; then printf '%s:%s;' "$t" "$((v/1000))"; fi; done)"
 
 BENCH_MODE=false
 STATE_FILE=/var/tmp/matching_machine_bench_env.state
