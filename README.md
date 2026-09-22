@@ -122,7 +122,7 @@ pool.allocate()
 | Order index | `absl::flat_hash_map` (Swiss Table) | Open-addressing; SIMD batch probe; reduced hash-map CPU overhead from ~32% → ~12% (perf measured) |
 | Price levels | `std::map` + `PriceLevel` vector + head cursor | `std::map::begin()` = best price in O(1); vector head cursor replaces `deque` for cache-friendly sequential access |
 | Latency measurement | RDTSC (`__rdtsc`) + P-quantile sort | `std::chrono` overhead ≈ 50–200 ns; RDTSC ≈ 5–20 cycles. Cross-thread latency via `timestamp_ns` field; safe under SPSC acquire/release |
-| Build | CMake + FetchContent | Google Benchmark, Google Test, abseil-cpp pulled automatically |
+| Build | CMake + FetchContent | Google Benchmark and GoogleTest fetched at configure time; Abseil resolved system-first with a pinned source fallback |
 | Profiling | `perf record -g --cpu-clock` + FlameGraph | Hardware PMU unavailable on cloud VM; cpu-clock software sampling used for function-level hotspot identification |
 
 ---
@@ -196,31 +196,58 @@ Consistent with perf report: `_int_malloc` + `_int_free` ≈ 20% of CPU time in 
 
 ### Prerequisites
 
-- GCC 11+ or Clang 14+ (C++20)
-- CMake 3.20+
-- Internet access (FetchContent downloads Google Benchmark, GTest, abseil-cpp)
+- GCC 11+ (C++20) — verified on GCC 15.2
+- CMake 3.20+ — verified on CMake 4.2
+- Internet access on first configure (GoogleTest and Google Benchmark are fetched
+  by `FetchContent`)
+
+```bash
+# Debian / Ubuntu
+sudo apt install cmake libabsl-dev
+```
+
+`libabsl-dev` is optional but recommended: Abseil is resolved system-first, and
+without it CMake falls back to building Abseil 20260107.0 from source, which adds
+several minutes to the first configure.
 
 ### Build
 
 ```bash
-# Release (for benchmark / latency measurements)
+# Release (for benchmarks and latency measurements)
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/release -j$(nproc)
 
-# Debug (for tests, AddressSanitizer enabled)
+# Debug (for tests; ASan + UBSan enabled)
 cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build build/debug -j$(nproc)
 ```
 
+> **Debug builds always compile Abseil from source**, even when `libabsl-dev` is
+> installed. Abseil's SwissTable changes its small-object-optimization layout under
+> AddressSanitizer, so sanitizer-instrumented code linked against a non-instrumented
+> system `libabsl.so` aborts inside Abseil at runtime. The first Debug configure is
+> therefore slower. See the comments in `CMakeLists.txt`.
+
 ### Run Tests
 
 ```bash
-cd build/debug && ctest --output-on-failure
+ctest --test-dir build/debug --output-on-failure
 ```
 
-Current test coverage: 33 GTest cases across OrderBook, SPSC Ring Buffer, MemoryPool,
-FeedSimulator, and MatchingEngine (including 13 integration tests covering memory safety,
-deallocator callbacks, and concurrent correctness).
+44 GTest cases across four targets — `test_order_book` (12), `test_matching_engine`
+(13, covering the SPSC pipeline, `TradeRingBuffer` and the no-alloc order-book path),
+`test_spsc_ring_buffer` (10, including two concurrent producer/consumer tests) and
+`test_memory_pool` (9). All pass under both configurations.
+
+### Known toolchain constraint
+
+Under GCC 15, UBSan's `null` and `function` sub-checks are incompatible with Abseil's
+SwissTable: both break constant-expression evaluation of a function-pointer comparison
+in `hash_policy_traits`, and `absl::flat_hash_map` fails to compile. The Debug
+configuration therefore enumerates the remaining UBSan checks explicitly rather than
+using `-fsanitize=undefined`; GCC does not support removing individual checks from that
+group. Null-pointer dereferences remain covered by ASan. Reproduced against both Abseil
+20260107 (Ubuntu package) and 20260817.0 (upstream), so this is not a packaging issue.
 
 ### Run Benchmarks
 
