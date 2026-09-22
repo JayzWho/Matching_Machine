@@ -147,7 +147,29 @@ TEMPS="$(for z in /sys/class/thermal/thermal_zone*/; do
     [ -n "$v" ] && printf '%s:%s;' "$t" "$((v/1000))"; done)"
 
 BENCH_MODE=false
-[ -f /var/tmp/matching_machine_bench_env.state ] && BENCH_MODE=true
+STATE_FILE=/var/tmp/matching_machine_bench_env.state
+[ -f "$STATE_FILE" ] && BENCH_MODE=true
+state_get() { [ -f "$STATE_FILE" ] && grep -m1 "^$1=" "$STATE_FILE" | cut -d= -f2- | sed 's/^"//; s/"$//' || true; }
+
+# Which cores a run is pinned to, and why. In measurement mode this is what
+# bench_env.sh setup chose (and steered interrupts away from); otherwise the
+# same ranking computed live. The ranking is recorded so an archive can show
+# why those cores were used rather than merely which.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEASURE_CPUS="$("$SCRIPT_DIR/bench_env.sh" cores --list 2>/dev/null || true)"
+MEASURE_RATIONALE="$("$SCRIPT_DIR/bench_env.sh" cores --rationale 2>/dev/null || true)"
+if [ "$BENCH_MODE" = true ]; then
+    MEASURE_SOURCE="bench_env.sh setup: $(state_get MEASURE_SOURCE)"
+else
+    MEASURE_SOURCE="computed live (measurement mode inactive; interrupts not steered)"
+fi
+IRQ_MOVED="$(state_get IRQ_MOVED)"
+IRQ_REFUSED="$(state_get IRQ_REFUSED)"
+IRQ_RESIDUAL="$(state_get IRQ_RESIDUAL)"
+# device (numbered) interrupts per online CPU since boot; header-mapped columns
+DEVICE_IRQS="$(awk 'NR == 1 { for (i = 1; i <= NF; i++) { c = $i; sub(/^CPU/, "", c); col[i] = c } n = NF; next }
+    $1 ~ /^[0-9]+:$/ { for (i = 1; i <= n; i++) { v = $(i + 1); if (v ~ /^[0-9]+$/) t[col[i]] += v } }
+    END { for (k in t) printf "%s:%s;", k, t[k] }' /proc/interrupts)"
 
 # ── emit ─────────────────────────────────────────────────────────────────────
 
@@ -195,7 +217,15 @@ printf '  "kernel_settings": {\n'
 kv  perf_event_paranoid "$(rd /proc/sys/kernel/perf_event_paranoid)"; printf ',\n'
 kv  transparent_hugepage "$(rd /sys/kernel/mm/transparent_hugepage/enabled)"; printf ',\n'
 kv  loadavg "$(cut -d' ' -f1-3 /proc/loadavg)"; printf ',\n'
-kvn bench_env_active "$BENCH_MODE"; printf '\n  }\n'
+kvn bench_env_active "$BENCH_MODE"; printf '\n  },\n'
+printf '  "measurement": {\n'
+kv  cores "$MEASURE_CPUS";                printf ',\n'
+kv  selection_source "$MEASURE_SOURCE";   printf ',\n'
+kv  core_ranking "$MEASURE_RATIONALE";    printf ',\n'
+kv  irq_steered_moved "$IRQ_MOVED";       printf ',\n'
+kv  irq_steered_refused "$IRQ_REFUSED";   printf ',\n'
+kv  irq_residual_on_cores "$IRQ_RESIDUAL"; printf ',\n'
+kv  device_irqs_by_cpu "$DEVICE_IRQS";    printf '\n  }\n'
 printf '}\n'
 } > "${OUT:-/dev/stdout}"
 
