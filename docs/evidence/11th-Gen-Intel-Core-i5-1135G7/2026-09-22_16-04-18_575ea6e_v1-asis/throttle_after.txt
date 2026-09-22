@@ -1,0 +1,6 @@
+  cpu0  core=19050      (physical core)
+  cpu1  core=17         (physical core)
+  cpu2  core=2815       (physical core)
+  cpu3  core=1          (physical core)
+  SUM  core=21883 (per-core, de-duplicated)
+  PKG  package=21560 (package-wide, single counter)
