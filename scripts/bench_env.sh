@@ -7,7 +7,8 @@
 # measurement state and restores the previous one afterwards, so day-to-day use
 # is unaffected. Nothing is written to /etc; a reboot reverts everything.
 #
-# Usage:
+# Usage (after the one-time install, the privileged commands can also be run
+# as `sudo -n /usr/local/sbin/mm-bench-env setup|restore` — see below):
 #   sudo ./scripts/bench_env.sh setup              enter measurement mode
 #        ./scripts/bench_env.sh setup --dry-run    show what setup would do
 #   sudo ./scripts/bench_env.sh setup --cpus 1,3   override core selection
@@ -53,13 +54,42 @@
 #   decides whether a measurement is valid is the throttle delta checked by
 #   run_anchor.sh across the run itself, not this ranking.
 #
+# Security model (this script is meant to be runnable via a NOPASSWD rule):
+#
+#   - The sudoers rule must name the ROOT-OWNED copy installed by
+#     scripts/install_bench_env.sh (/usr/local/sbin/mm-bench-env), never this
+#     file. This file lives in a user-writable repository; anyone who can edit
+#     it would get root through such a rule.
+#   - State lives in /run/matching-machine-bench/. /run is root-owned and 0755,
+#     so only root can create entries there, and it is a tmpfs, so state does
+#     not outlive a reboot — which reverts every setting anyway. The previous
+#     location, /var/tmp, is world-writable: any local process could plant a
+#     "state file" there for restore to consume.
+#   - restore never sources or evaluates the state. It checks that the state
+#     directory and files are root-owned, not symlinks and not group/world
+#     writable, then parses each value and accepts it only if it matches a
+#     strict pattern (numbers, CPU lists, hex masks, governor names). Values
+#     are pattern-checked BEFORE any arithmetic, because bash arithmetic on an
+#     untrusted string can execute commands (e.g. a[$(cmd)]).
+#   - As root the script pins PATH and umask instead of inheriting them.
+#
 # See docs/AUDIT.md for why this matters to the measurements.
 # =============================================================================
 
 set -euo pipefail
+export LC_ALL=C
+if [ "$(id -u)" -eq 0 ]; then
+    # Never inherit PATH or umask in a privileged run.
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export PATH
+    umask 022
+fi
 
-STATE_FILE="/var/tmp/matching_machine_bench_env.state"
-IRQ_FILE="/var/tmp/matching_machine_bench_env.irq"
+STATE_DIR="/run/matching-machine-bench"
+STATE_FILE="$STATE_DIR/state"
+IRQ_FILE="$STATE_DIR/irq"
+# Written by versions before the privilege hardening. Never trusted.
+LEGACY_STATE_FILE="/var/tmp/matching_machine_bench_env.state"
 PSTATE_DIR="/sys/devices/system/cpu/intel_pstate"
 CPU_DIR="/sys/devices/system/cpu"
 
@@ -70,9 +100,116 @@ warn() { echo "  [!] $*" >&2; }
 need_root() { [ "$(id -u)" -eq 0 ] || die "this action needs root: sudo $0 $1"; }
 rd()   { cat "$1" 2>/dev/null || echo "?"; }
 
-state_get() {  # read KEY from the saved state without sourcing it
+# Value of KEY in a KEY=value / KEY="value" file. Pure text extraction: the
+# file is never sourced or evaluated. $1 = file, $2 = key (a literal from this
+# script, never user input).
+kv_get() {
+    local line
+    line="$(grep -m1 -E "^$2=" "$1" 2>/dev/null || true)"
+    line="${line#*=}"
+    line="${line#\"}"
+    line="${line%\"}"
+    printf '%s' "$line"
+}
+
+state_get() {  # for read-only, unprivileged display
     [ -f "$STATE_FILE" ] || return 0
-    grep -m1 "^$1=" "$STATE_FILE" | cut -d= -f2- | sed 's/^"//; s/"$//'
+    kv_get "$STATE_FILE" "$1"
+}
+
+# Refuse any path that a non-root user could have planted or modified.
+# $1 = path, $2 = expected owner uid (0 in production; the tests pass their own)
+require_trusted() {
+    local p="$1" uid="$2" owner mode
+    [ -L "$p" ] && die "$p is a symlink; refusing to trust it"
+    [ -e "$p" ] || die "$p does not exist"
+    owner="$(stat -c %u -- "$p")"
+    mode="$(stat -c %a -- "$p")"
+    [ "$owner" = "$uid" ] || die "$p is owned by uid $owner, expected uid $uid; refusing to trust it"
+    (( (8#$mode & 8#022) == 0 )) || die "$p is group- or world-writable (mode $mode); refusing to trust it"
+}
+
+# Create the state directory, or verify an existing one.
+ensure_state_dir() {
+    if [ -e "$STATE_DIR" ] || [ -L "$STATE_DIR" ]; then
+        require_trusted "$STATE_DIR" 0
+        [ -d "$STATE_DIR" ] || die "$STATE_DIR exists but is not a directory"
+    else
+        install -d -o root -g root -m 0755 "$STATE_DIR"
+    fi
+}
+
+# Parse and validate the saved state WITHOUT executing any of it. Populates the
+# R_* globals; every value that fails its pattern is dropped and described in
+# R_REJECTED. Patterns are checked before any arithmetic on a value.
+#   $1 = expected owner uid of the state directory and files
+load_saved_state() {
+    local uid="$1" v key pair c g irq aff extra
+    local -a items=()
+    require_trusted "$STATE_DIR" "$uid"
+    [ -d "$STATE_DIR" ] || die "$STATE_DIR is not a directory"
+    require_trusted "$STATE_FILE" "$uid"
+    [ -f "$STATE_FILE" ] || die "$STATE_FILE is not a regular file"
+
+    R_REJECTED=()
+
+    v="$(kv_get "$STATE_FILE" SAVED_PARANOID)"
+    if [[ "$v" =~ ^-?[0-9]$ ]] && (( v >= -1 && v <= 4 )); then
+        R_PARANOID="$v"
+    else
+        R_PARANOID=4
+        R_REJECTED+=("SAVED_PARANOID='$v' (restoring the most restrictive value, 4)")
+    fi
+
+    v="$(kv_get "$STATE_FILE" SAVED_NO_TURBO)"
+    if [[ "$v" =~ ^[01]$ ]]; then R_NO_TURBO="$v"; else R_NO_TURBO=""; R_REJECTED+=("SAVED_NO_TURBO='$v'"); fi
+
+    for key in SAVED_MIN_PCT SAVED_MAX_PCT; do
+        v="$(kv_get "$STATE_FILE" "$key")"
+        if [[ "$v" =~ ^[0-9]{1,3}$ ]] && (( 10#$v <= 100 )); then
+            v="$((10#$v))"
+        else
+            R_REJECTED+=("$key='$v'"); v=""
+        fi
+        if [ "$key" = SAVED_MIN_PCT ]; then R_MIN_PCT="$v"; else R_MAX_PCT="$v"; fi
+    done
+
+    R_GOVERNORS=()
+    read -r -a items <<< "$(kv_get "$STATE_FILE" SAVED_GOVERNORS)"
+    for pair in "${items[@]}"; do
+        c="${pair%%:*}"; g="${pair#*:}"
+        if [[ "$c" =~ ^[0-9]{1,4}$ && "$g" =~ ^[a-z_]{1,32}$ ]]; then
+            R_GOVERNORS+=("$c:$g")
+        else
+            R_REJECTED+=("governor entry '$pair'")
+        fi
+    done
+
+    R_OFFLINED=()
+    read -r -a items <<< "$(kv_get "$STATE_FILE" SAVED_OFFLINED)"
+    for c in "${items[@]}"; do
+        if [[ "$c" =~ ^[0-9]{1,4}$ ]]; then R_OFFLINED+=("$c"); else R_REJECTED+=("offlined CPU '$c'"); fi
+    done
+
+    v="$(kv_get "$STATE_FILE" SAVED_DEFAULT_IRQ_MASK)"
+    if [[ "$v" =~ ^[0-9a-fA-F]{1,16}(,[0-9a-fA-F]{1,16})*$ ]]; then
+        R_DEFAULT_IRQ_MASK="$v"
+    else
+        R_DEFAULT_IRQ_MASK=""; R_REJECTED+=("SAVED_DEFAULT_IRQ_MASK='$v'")
+    fi
+
+    R_IRQS=()
+    if [ -e "$IRQ_FILE" ] || [ -L "$IRQ_FILE" ]; then
+        require_trusted "$IRQ_FILE" "$uid"
+        [ -f "$IRQ_FILE" ] || die "$IRQ_FILE is not a regular file"
+        while read -r irq aff extra; do
+            if [[ "$irq" =~ ^[0-9]{1,5}$ && "$aff" =~ ^[0-9]{1,4}(-[0-9]{1,4})?(,[0-9]{1,4}(-[0-9]{1,4})?)*$ && -z "$extra" ]]; then
+                R_IRQS+=("$irq $aff")
+            else
+                R_REJECTED+=("IRQ entry '$irq $aff${extra:+ $extra}'")
+            fi
+        done < "$IRQ_FILE"
+    fi
 }
 
 online_cpus() {
@@ -222,6 +359,9 @@ cmd_status() {
     else
         echo "  inactive"
     fi
+    if [ -e "$LEGACY_STATE_FILE" ]; then
+        echo "  note: $LEGACY_STATE_FILE was left by an older version and is ignored"
+    fi
 }
 
 cmd_throttle() {
@@ -289,15 +429,16 @@ cmd_setup() {
     done
     [ "$dry" = 1 ] || need_root setup
     [ -f "$STATE_FILE" ] && die "measurement mode already active ($STATE_FILE). Run 'restore' first."
+    [ -e "$LEGACY_STATE_FILE" ] && warn "ignoring $LEGACY_STATE_FILE (left by an older version; it is not trusted)"
     [ -d "$PSTATE_DIR" ] || die "intel_pstate not present; this script targets intel_pstate systems"
 
     # Choose measurement cores BEFORE changing anything: the ranking reads
     # interrupt columns that disappear from /proc/interrupts once siblings go
     # offline, and interrupt counts that steering is about to change.
-    local measure source rationale sibs housekeeping="" c
+    local measure selection rationale sibs housekeeping="" c
     measure="$(select_cores "$override" | tr '\n' ' ' | sed 's/ $//')"
     [ "$(wc -w <<< "$measure")" -eq 2 ] || die "could not select two measurement cores"
-    if [ -n "$override" ]; then source="override (--cpus $override)"; else source="ranked"; fi
+    if [ -n "$override" ]; then selection="override (--cpus $override)"; else selection="ranked"; fi
     rationale="$(rank_rationale)"
     sibs="$(sibling_cpus | tr '\n' ' ' | sed 's/ $//')"
     for c in $(online_cpus); do
@@ -307,7 +448,7 @@ cmd_setup() {
     done
     housekeeping="${housekeeping# }"
 
-    echo "[*] measurement cores : $measure  ($source)"
+    echo "[*] measurement cores : $measure  ($selection)"
     echo "    ranking           : $rationale"
     echo "[*] housekeeping cores: ${housekeeping:-(none)}"
     echo "[*] SMT siblings      : ${sibs:-(none)}"
@@ -320,6 +461,7 @@ cmd_setup() {
         return
     fi
 
+    ensure_state_dir
     echo "[*] saving current state -> $STATE_FILE, $IRQ_FILE"
     {
         echo "# saved by bench_env.sh at $(date -Is)"
@@ -331,9 +473,13 @@ cmd_setup() {
         echo "SAVED_OFFLINED=\"$sibs\""
         echo "SAVED_DEFAULT_IRQ_MASK=$(rd /proc/irq/default_smp_affinity)"
         echo "MEASURE_CPUS=\"$measure\""
-        echo "MEASURE_SOURCE=\"$source\""
+        echo "MEASURE_SOURCE=\"$selection\""
         echo "MEASURE_RATIONALE=\"$rationale\""
         echo "HOUSEKEEPING=\"$housekeeping\""
+        # Which script performed setup, so an archive can tell whether the
+        # installed copy matched the committed one.
+        echo "SETUP_SCRIPT=\"$(readlink -f -- "$0")\""
+        echo "SETUP_SCRIPT_SHA256=$(sha256sum -- "$0" | cut -d' ' -f1)"
     } > "$STATE_FILE"
     # IRQ affinities are saved BEFORE siblings go offline: offlining can rewrite
     # the mask of an interrupt whose only allowed CPUs disappear.
@@ -418,50 +564,62 @@ cmd_setup() {
 
 cmd_restore() {
     need_root restore
-    [ -f "$STATE_FILE" ] || die "no saved state at $STATE_FILE — nothing to restore"
-    # shellcheck disable=SC1090
-    source "$STATE_FILE"
+    if [ ! -e "$STATE_FILE" ] && [ ! -L "$STATE_FILE" ]; then
+        if [ -e "$LEGACY_STATE_FILE" ]; then
+            die "no state in $STATE_DIR, but $LEGACY_STATE_FILE exists. It was written by an
+    older version into a world-writable directory and will not be trusted.
+    Reboot to revert every setting, then delete that file."
+        fi
+        die "no saved state at $STATE_FILE — nothing to restore"
+    fi
 
-    echo "[*] bringing offlined CPUs back online:${SAVED_OFFLINED:- (none)}"
-    for c in ${SAVED_OFFLINED:-}; do
-        [ -e "$CPU_DIR/cpu$c/online" ] && echo 1 > "$CPU_DIR/cpu$c/online"
+    load_saved_state 0
+    local r
+    for r in "${R_REJECTED[@]}"; do warn "saved state rejected, not restored: $r"; done
+
+    echo "[*] bringing offlined CPUs back online:${R_OFFLINED[*]:+ ${R_OFFLINED[*]}}"
+    local c
+    for c in "${R_OFFLINED[@]}"; do
+        if [ -e "$CPU_DIR/cpu$c/online" ]; then echo 1 > "$CPU_DIR/cpu$c/online"; fi
     done
 
     # After CPUs are back, so masks naming them are accepted again.
-    if [ -f "$IRQ_FILE" ]; then
-        local ok=0 bad=0 irq aff
-        echo "[*] restoring IRQ affinities"
-        while read -r irq aff; do
-            [ -e "/proc/irq/$irq/smp_affinity_list" ] || continue
-            if echo "$aff" > "/proc/irq/$irq/smp_affinity_list" 2>/dev/null; then
-                ok=$((ok + 1))
-            else
-                bad=$((bad + 1))
-            fi
-        done < "$IRQ_FILE"
-        echo "    restored=$ok refused=$bad"
-    fi
-    if [ -n "${SAVED_DEFAULT_IRQ_MASK:-}" ] && [ "$SAVED_DEFAULT_IRQ_MASK" != "?" ]; then
-        echo "$SAVED_DEFAULT_IRQ_MASK" > /proc/irq/default_smp_affinity 2>/dev/null \
+    local ok=0 bad=0 entry irq aff
+    echo "[*] restoring IRQ affinities"
+    for entry in "${R_IRQS[@]}"; do
+        irq="${entry%% *}"; aff="${entry#* }"
+        [ -e "/proc/irq/$irq/smp_affinity_list" ] || continue
+        if echo "$aff" > "/proc/irq/$irq/smp_affinity_list" 2>/dev/null; then
+            ok=$((ok + 1))
+        else
+            bad=$((bad + 1))
+        fi
+    done
+    echo "    restored=$ok refused=$bad"
+    if [ -n "$R_DEFAULT_IRQ_MASK" ]; then
+        echo "$R_DEFAULT_IRQ_MASK" > /proc/irq/default_smp_affinity 2>/dev/null \
             || warn "could not restore default_smp_affinity"
     fi
 
     echo "[*] restoring intel_pstate limits"
     # max before min, so an invalid intermediate range is never requested
-    [ "${SAVED_MAX_PCT:-?}" != "?" ]  && echo "$SAVED_MAX_PCT"  > "$PSTATE_DIR/max_perf_pct"
-    [ "${SAVED_MIN_PCT:-?}" != "?" ]  && echo "$SAVED_MIN_PCT"  > "$PSTATE_DIR/min_perf_pct"
-    [ "${SAVED_NO_TURBO:-?}" != "?" ] && echo "$SAVED_NO_TURBO" > "$PSTATE_DIR/no_turbo"
+    if [ -n "$R_MAX_PCT" ];  then echo "$R_MAX_PCT"  > "$PSTATE_DIR/max_perf_pct"; fi
+    if [ -n "$R_MIN_PCT" ];  then echo "$R_MIN_PCT"  > "$PSTATE_DIR/min_perf_pct"; fi
+    if [ -n "$R_NO_TURBO" ]; then echo "$R_NO_TURBO" > "$PSTATE_DIR/no_turbo"; fi
 
     echo "[*] restoring governors"
-    for pair in ${SAVED_GOVERNORS:-}; do
-        local c="${pair%%:*}" g="${pair##*:}"
-        [ -e "$CPU_DIR/cpu$c/cpufreq/scaling_governor" ] && echo "$g" > "$CPU_DIR/cpu$c/cpufreq/scaling_governor" 2>/dev/null || true
+    local pair g
+    for pair in "${R_GOVERNORS[@]}"; do
+        c="${pair%%:*}"; g="${pair#*:}"
+        if [ -e "$CPU_DIR/cpu$c/cpufreq/scaling_governor" ]; then
+            echo "$g" > "$CPU_DIR/cpu$c/cpufreq/scaling_governor" 2>/dev/null || warn "could not restore governor of cpu$c"
+        fi
     done
 
-    echo "[*] restoring perf_event_paranoid -> ${SAVED_PARANOID:-4}"
-    echo "${SAVED_PARANOID:-4}" > /proc/sys/kernel/perf_event_paranoid
+    echo "[*] restoring perf_event_paranoid -> $R_PARANOID"
+    echo "$R_PARANOID" > /proc/sys/kernel/perf_event_paranoid
 
-    rm -f "$STATE_FILE" "$IRQ_FILE"
+    rm -f -- "$STATE_FILE" "$IRQ_FILE"
     echo
     cmd_status
 }
@@ -470,11 +628,19 @@ cmd_restore() {
 
 usage() { awk 'NR > 2 && /^# =====/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "$0"; }
 
-case "${1:-}" in
-    setup)    shift; cmd_setup "$@" ;;
-    restore)  cmd_restore ;;
-    status)   cmd_status ;;
-    throttle) cmd_throttle ;;
-    cores)    shift; cmd_cores "${1:-}" ;;
-    *)        usage; exit 1 ;;
-esac
+main() {
+    case "${1:-}" in
+        setup)    shift; cmd_setup "$@" ;;
+        restore)  cmd_restore ;;
+        status)   cmd_status ;;
+        throttle) cmd_throttle ;;
+        cores)    shift; cmd_cores "${1:-}" ;;
+        *)        usage; exit 1 ;;
+    esac
+}
+
+# Only dispatch when executed. When sourced (scripts/test_bench_env.sh), the
+# file just defines its functions so they can be tested without root.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
