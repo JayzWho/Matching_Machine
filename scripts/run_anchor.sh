@@ -34,7 +34,7 @@ ALLOW_UNPINNED="${ME_ALLOW_UNPINNED:-0}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT/build/release"
-STATE_FILE="/var/tmp/matching_machine_bench_env.state"
+STATE_FILE="/run/matching-machine-bench/state"   # written by bench_env.sh setup
 
 cd "$ROOT"
 
@@ -49,7 +49,8 @@ if [ ! -f "$STATE_FILE" ]; then
         echo "[!] measurement mode is NOT active — results will be marked INVALID"
     else
         die "measurement mode is not active.
-    Run:  sudo ./scripts/bench_env.sh setup
+    Run:  sudo -n /usr/local/sbin/mm-bench-env setup   (installed copy, see install_bench_env.sh)
+     or:  sudo ./scripts/bench_env.sh setup
     Or set ME_ALLOW_UNPINNED=1 to proceed anyway (output marked INVALID)."
     fi
 fi
@@ -224,6 +225,15 @@ echo "- core selection ranking (best first): $CORE_RATIONALE"
 echo "- device IRQs delivered to measurement cores during the run: $IRQ_SUMMARY"
 echo "  (informational: bench_env.sh steers movable IRQs away; kernel-managed or"
 echo "  per-cpu IRQs cannot be moved and may still fire here)"
+if [ "$PINNED" = 1 ]; then
+    SETUP_SHA="$(grep -m1 '^SETUP_SCRIPT_SHA256=' "$STATE_FILE" | cut -d= -f2)"
+    SETUP_BY="$(grep -m1 '^SETUP_SCRIPT=' "$STATE_FILE" | cut -d= -f2- | tr -d '"')"
+    REPO_SHA="$(sha256sum -- "$ROOT/scripts/bench_env.sh" | cut -d' ' -f1)"
+    if [ -z "$SETUP_SHA" ]; then MATCH="unknown (state predates provenance recording)"
+    elif [ "$SETUP_SHA" = "$REPO_SHA" ]; then MATCH="yes"
+    else MATCH="NO — the installed copy is stale; re-run scripts/install_bench_env.sh"; fi
+    echo "- environment set up by: \`${SETUP_BY:-unknown}\` (sha256 \`${SETUP_SHA:-unknown}\`); matches committed \`scripts/bench_env.sh\`: $MATCH"
+fi
 echo "- environment: see \`env_before.json\` / \`env_after.json\`"
 } > "$OUT/RESULT.md"
 
