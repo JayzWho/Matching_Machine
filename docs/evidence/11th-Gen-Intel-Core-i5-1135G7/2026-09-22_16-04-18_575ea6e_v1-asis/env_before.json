@@ -1,0 +1,61 @@
+{
+  "captured_at": "2026-09-22T16:04:18-04:00",
+  "git": {
+    "commit": "575ea6e93401fa50b0528947fea4df719f0ef6eb",
+    "short": "575ea6e",
+    "branch": "bench/anchor-v1-asis",
+    "describe": "v1.0-vm-era-7-g575ea6e-dirty",
+    "dirty": true
+  },
+  "toolchain": {
+    "compiler": "/usr/bin/c++",
+    "compiler_version": "c++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+    "cmake": "cmake version 4.2.3",
+    "build_type": "Release",
+    "cxx_standard": "c++20",
+    "build_flags": "-O2 -DNDEBUG -std=c++20",
+    "build_flags_source": "compile_commands.json",
+    "build_dir": "/home/jz/projects/personal/Matching_Machine/build/release",
+    "abseil": "system",
+    "abseil_dir": "/usr/lib/x86_64-linux-gnu/cmake/absl"
+  },
+  "os": {
+    "kernel": "7.0.0-31-generic",
+    "uname": "Linux jz-HP-Ubuntu 7.0.0-31-generic #31-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 04:26:38 UTC 2026 x86_64 GNU/Linux",
+    "distro": "Ubuntu 26.04.1 LTS"
+  },
+  "cpu": {
+    "model": "11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz",
+    "online": "0,1,2,3",
+    "thread_siblings": "0=0;1=1;2=2;3=3;",
+    "nproc": 4
+  },
+  "frequency": {
+    "governor": "performance",
+    "driver": "intel_pstate",
+    "no_turbo": "1",
+    "min_perf_pct": "100",
+    "max_perf_pct": "100",
+    "current_mhz": "0:576;1:400;2:400;3:686;"
+  },
+  "thermal": {
+    "core_throttle_total": 21883,
+    "package_throttle": 21560,
+    "zones_celsius": "acpitz:48;INT3400 Thermal:20;SEN1:39;SEN2:47;SEN3:46;TCPU:47;x86_pkg_temp:47;iwlwifi_1:49;"
+  },
+  "kernel_settings": {
+    "perf_event_paranoid": "1",
+    "transparent_hugepage": "always [madvise] never",
+    "loadavg": "0.79 0.64 0.35",
+    "bench_env_active": true
+  },
+  "measurement": {
+    "cores": "3,1",
+    "selection_source": "bench_env.sh setup: ranked",
+    "core_ranking": "cpu3[3,7] throttle=1 irqs=690850; cpu1[1,5] throttle=17 irqs=664103; cpu2[2,6] throttle=2815 irqs=31942654; cpu0[0,4] throttle=19050 irqs=2877013",
+    "irq_steered_moved": "60",
+    "irq_steered_refused": "12",
+    "irq_residual_on_cores": "120:dmar0-prq@cpu1 122:dmar1@cpu3",
+    "device_irqs_by_cpu": "3:379963;2:1404367;1:315386;0:2554097;"
+  }
+}
