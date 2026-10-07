@@ -151,7 +151,7 @@ TEMPS="$(for z in /sys/class/thermal/thermal_zone*/; do
     if [ -n "$v" ]; then printf '%s:%s;' "$t" "$((v/1000))"; fi; done)"
 
 BENCH_MODE=false
-STATE_FILE=/var/tmp/matching_machine_bench_env.state
+STATE_FILE=/run/matching-machine-bench/state   # written by bench_env.sh setup
 [ -f "$STATE_FILE" ] && BENCH_MODE=true
 state_get() { [ -f "$STATE_FILE" ] && grep -m1 "^$1=" "$STATE_FILE" | cut -d= -f2- | sed 's/^"//; s/"$//' || true; }
 
@@ -168,6 +168,17 @@ else
     MEASURE_SOURCE="computed live (measurement mode inactive; interrupts not steered)"
 fi
 IRQ_MOVED="$(state_get IRQ_MOVED)"
+# Which bench_env.sh performed setup, and whether it matches the committed one.
+# The privileged copy is installed separately (install_bench_env.sh), so it can
+# lag behind the repository; an archive has to be able to show that.
+SETUP_SCRIPT="$(state_get SETUP_SCRIPT)"
+SETUP_SHA="$(state_get SETUP_SCRIPT_SHA256)"
+REPO_SHA="$(sha256sum -- "$SCRIPT_DIR/bench_env.sh" 2>/dev/null | cut -d' ' -f1)"
+INSTALLED_SHA="$(sha256sum -- /usr/local/sbin/mm-bench-env 2>/dev/null | cut -d' ' -f1 || true)"
+SETUP_MATCHES_REPO=null
+if [ -n "$SETUP_SHA" ]; then
+    if [ "$SETUP_SHA" = "$REPO_SHA" ]; then SETUP_MATCHES_REPO=true; else SETUP_MATCHES_REPO=false; fi
+fi
 IRQ_REFUSED="$(state_get IRQ_REFUSED)"
 IRQ_RESIDUAL="$(state_get IRQ_RESIDUAL)"
 # device (numbered) interrupts per online CPU since boot; header-mapped columns
@@ -229,7 +240,12 @@ kv  core_ranking "$MEASURE_RATIONALE";    printf ',\n'
 kv  irq_steered_moved "$IRQ_MOVED";       printf ',\n'
 kv  irq_steered_refused "$IRQ_REFUSED";   printf ',\n'
 kv  irq_residual_on_cores "$IRQ_RESIDUAL"; printf ',\n'
-kv  device_irqs_by_cpu "$DEVICE_IRQS";    printf '\n  }\n'
+kv  device_irqs_by_cpu "$DEVICE_IRQS";    printf ',\n'
+kv  bench_env_setup_script "$SETUP_SCRIPT";      printf ',\n'
+kv  bench_env_setup_sha256 "$SETUP_SHA";         printf ',\n'
+kv  bench_env_repo_sha256 "$REPO_SHA";           printf ',\n'
+kv  bench_env_installed_sha256 "$INSTALLED_SHA"; printf ',\n'
+kvn bench_env_setup_matches_repo "$SETUP_MATCHES_REPO"; printf '\n  }\n'
 printf '}\n'
 } > "${OUT:-/dev/stdout}"
 
