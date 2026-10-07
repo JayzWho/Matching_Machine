@@ -165,7 +165,7 @@ MEASURE_RATIONALE="$("$SCRIPT_DIR/bench_env.sh" cores --rationale 2>/dev/null ||
 if [ "$BENCH_MODE" = true ]; then
     MEASURE_SOURCE="bench_env.sh setup: $(state_get MEASURE_SOURCE)"
 else
-    MEASURE_SOURCE="computed live (measurement mode inactive; interrupts not steered)"
+    MEASURE_SOURCE="$("$SCRIPT_DIR/bench_env.sh" cores --selection 2>/dev/null || echo unknown); measurement mode inactive, interrupts not steered"
 fi
 IRQ_MOVED="$(state_get IRQ_MOVED)"
 # Which bench_env.sh performed setup, and whether it matches the committed one.

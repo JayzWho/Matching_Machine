@@ -65,7 +65,8 @@ done
 # same ranking is computed live. Never "the lowest two online CPUs": on this
 # machine cpu0 is the effective ACPI interrupt target and throttles far more
 # than any other core. See the header of scripts/bench_env.sh.
-MEASURE="$(./scripts/bench_env.sh cores --list)"
+MEASURE="$(./scripts/bench_env.sh cores --list)" || die "could not determine the measurement cores"
+CORE_SELECTION="$(./scripts/bench_env.sh cores --selection)"
 CORE_RATIONALE="$(./scripts/bench_env.sh cores --rationale)"
 IFS=',' read -r -a MEASURE_ARR <<< "$MEASURE"
 [ "${#MEASURE_ARR[@]}" -eq 2 ] || die "could not determine two measurement cores (got '$MEASURE')"
@@ -100,6 +101,20 @@ cmake --build "$BUILD_DIR" -j"$(nproc)" >/dev/null || die "Release build failed"
 CPU_TAG="$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //; s/(R)//g; s/(TM)//g; s/ CPU.*//; s/ @.*//; s/ \+/-/g; s/^-//')"
 STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
 
+# Results are only comparable with the anchor if they ran on the same cores, in
+# the same roles. baseline.json records what the anchor used on this machine.
+BASELINE_FILE="$ROOT/docs/evidence/${CPU_TAG}/baseline.json"
+SAME_CORES="n/a — no baseline.json for this machine yet"
+if [ -f "$BASELINE_FILE" ]; then
+    BASE_CORES="$(grep -oP '"measurement_cores"\s*:\s*"\K[^"]+' "$BASELINE_FILE" || true)"
+    BASE_RUN="$(grep -oP '"anchor_run"\s*:\s*"\K[^"]+' "$BASELINE_FILE" || true)"
+    if [ "$BASE_CORES" = "$MEASURE" ]; then
+        SAME_CORES="yes — $MEASURE, as in anchor $BASE_RUN"
+    else
+        SAME_CORES="NO — this run used $MEASURE but anchor $BASE_RUN used $BASE_CORES; the two are NOT comparable"
+    fi
+fi
+
 OUT="$ROOT/docs/evidence/${CPU_TAG}/${STAMP}_${GIT_SHA}${GIT_DIRTY}_${LABEL}"
 [ "$DRY_RUN" = "1" ] && OUT="$(mktemp -d)/dryrun"
 mkdir -p "$OUT"
@@ -112,7 +127,8 @@ echo "  pinned       : $([ "$PINNED" = 1 ] && echo yes || echo 'NO — INVALID')
 echo "  repetitions  : $REPETITIONS"
 echo "  single-thread: taskset -c $CPU_SOLO"
 echo "  two-thread   : taskset -c $CPU_PAIR"
-echo "  core ranking : $CORE_RATIONALE"
+echo "  cores chosen : $MEASURE  ($CORE_SELECTION)"
+echo "  same as anchor: $SAME_CORES"
 echo "  output       : $OUT"
 echo "=============================================================="
 
@@ -181,6 +197,8 @@ echo "# Anchor measurement — $LABEL"
 echo
 echo "**Verdict: $VERDICT**"
 echo
+echo "**Same measurement cores as the anchor: $SAME_CORES**"
+echo
 if [ -n "$REASONS" ]; then echo "Reasons:"; printf "%b" "$REASONS"; echo; fi
 cat <<MD
 ## What this is
@@ -221,7 +239,8 @@ echo "- repetitions: $REPETITIONS"
 echo "- single-thread affinity: \`taskset -c $CPU_SOLO\`"
 echo "- two-thread affinity: \`taskset -c $CPU_PAIR\`"
 echo "- throttle delta: core +$D_CORE, package +$D_PKG"
-echo "- core selection ranking (best first): $CORE_RATIONALE"
+echo "- measurement cores: \`$MEASURE\`, selected by: $CORE_SELECTION"
+echo "- live core ranking at setup (advisory only; its inputs reset on reboot): $CORE_RATIONALE"
 echo "- device IRQs delivered to measurement cores during the run: $IRQ_SUMMARY"
 echo "  (informational: bench_env.sh steers movable IRQs away; kernel-managed or"
 echo "  per-cpu IRQs cannot be moved and may still fire here)"
@@ -239,6 +258,7 @@ echo "- environment: see \`env_before.json\` / \`env_after.json\`"
 
 echo "=============================================================="
 echo "  verdict       : $VERDICT"
+echo "  same cores as anchor: $SAME_CORES"
 echo "  throttle delta: core +$D_CORE  package +$D_PKG"
 echo "  device IRQs on measurement cores: $IRQ_SUMMARY"
 echo "  output        : $OUT"
