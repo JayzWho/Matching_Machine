@@ -1,0 +1,66 @@
+{
+  "captured_at": "2026-10-07T12:46:57-04:00",
+  "git": {
+    "commit": "54a8cfe75156a8c060b9b8a0e450adcedcd551c4",
+    "short": "54a8cfe",
+    "branch": "master",
+    "describe": "v1.0-vm-era-15-g54a8cfe-dirty",
+    "dirty": true
+  },
+  "toolchain": {
+    "compiler": "/usr/bin/c++",
+    "compiler_version": "c++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+    "cmake": "cmake version 4.2.3",
+    "build_type": "Release",
+    "cxx_standard": "c++20",
+    "build_flags": "-O2 -DNDEBUG -std=c++20",
+    "build_flags_source": "compile_commands.json",
+    "build_dir": "/home/jz/projects/personal/Matching_Machine/build/release",
+    "abseil": "system",
+    "abseil_dir": "/usr/lib/x86_64-linux-gnu/cmake/absl"
+  },
+  "os": {
+    "kernel": "7.0.0-34-generic",
+    "uname": "Linux jz-HP-Ubuntu 7.0.0-34-generic #34-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:29:37 UTC 2026 x86_64 GNU/Linux",
+    "distro": "Ubuntu 26.04.1 LTS"
+  },
+  "cpu": {
+    "model": "11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz",
+    "online": "0,1,2,3",
+    "thread_siblings": "0=0;1=1;2=2;3=3;",
+    "nproc": 4
+  },
+  "frequency": {
+    "governor": "performance",
+    "driver": "intel_pstate",
+    "no_turbo": "1",
+    "min_perf_pct": "100",
+    "max_perf_pct": "100",
+    "current_mhz": "0:400;1:400;2:1370;3:762;"
+  },
+  "thermal": {
+    "core_throttle_total": 151,
+    "package_throttle": 142,
+    "zones_celsius": "acpitz:48;INT3400 Thermal:20;SEN1:39;SEN2:46;SEN3:45;TCPU:44;x86_pkg_temp:44;iwlwifi_1:41;"
+  },
+  "kernel_settings": {
+    "perf_event_paranoid": "1",
+    "transparent_hugepage": "always [madvise] never",
+    "loadavg": "1.42 0.80 0.37",
+    "bench_env_active": true
+  },
+  "measurement": {
+    "cores": "3,1",
+    "selection_source": "bench_env.sh setup: pinned (/etc/matching-machine-bench.conf)",
+    "core_ranking": "cpu2[2,6] throttle=0 irqs=38168533; cpu0[0,4] throttle=3 irqs=3436390; cpu3[3,7] throttle=55 irqs=4873370; cpu1[1,5] throttle=93 irqs=804617",
+    "irq_steered_moved": "60",
+    "irq_steered_refused": "12",
+    "irq_residual_on_cores": "120:dmar0-prq@cpu1 122:dmar1@cpu3",
+    "device_irqs_by_cpu": "3:4570088;2:436935;1:492009;0:3153281;",
+    "bench_env_setup_script": "/usr/local/sbin/mm-bench-env",
+    "bench_env_setup_sha256": "b0481f0fa2e24f826c1d5003508f46cdd72a33464d25dc30f115207b0787e4bd",
+    "bench_env_repo_sha256": "b0481f0fa2e24f826c1d5003508f46cdd72a33464d25dc30f115207b0787e4bd",
+    "bench_env_installed_sha256": "b0481f0fa2e24f826c1d5003508f46cdd72a33464d25dc30f115207b0787e4bd",
+    "bench_env_setup_matches_repo": true
+  }
+}
