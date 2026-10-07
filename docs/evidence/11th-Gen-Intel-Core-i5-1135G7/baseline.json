@@ -1,0 +1,6 @@
+{
+  "anchor_run": "2026-09-22_16-04-18_575ea6e_v1-asis",
+  "measurement_cores": "3,1",
+  "roles": "first core runs the single-threaded benchmarks; both run the two-threaded ones",
+  "note": "Later runs on this machine are comparable with the anchor only if they use the same cores in the same order. Pin them with: sudo ./scripts/install_bench_env.sh --pin 3,1"
+}

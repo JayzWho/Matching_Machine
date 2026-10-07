@@ -9,8 +9,17 @@
 #
 # Usage:
 #   sudo ./scripts/install_bench_env.sh              install or update the copy
+#   sudo ./scripts/install_bench_env.sh --pin A,B    install/update, then pin the
+#                                                    measurement cores (A runs the
+#                                                    single-threaded benchmarks)
+#   sudo ./scripts/install_bench_env.sh --unpin      remove the pin
 #        ./scripts/install_bench_env.sh --check      report status (no root)
 #   sudo ./scripts/install_bench_env.sh --uninstall  remove the copy
+#
+# Why pin: measurements are only comparable when they run on the same cores.
+# Left unpinned, bench_env.sh ranks cores by counters that reset on reboot, so
+# the pair can change from one boot to the next. The pin is a root-owned file,
+# /etc/matching-machine-bench.conf, because the root-run command reads it.
 #
 # After the first install, add the sudoers rule yourself (this script never
 # edits sudoers — that change should be made deliberately, by the admin):
@@ -32,6 +41,8 @@ export LC_ALL=C
 
 DEST="/usr/local/sbin/mm-bench-env"
 SUDOERS_FILE="/etc/sudoers.d/matching-machine-bench"
+PIN_FILE="/etc/matching-machine-bench.conf"
+STATE_FILE="/run/matching-machine-bench/state"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/scripts/bench_env.sh"
 
@@ -71,6 +82,21 @@ check() {
             echo "sudo rule       : '$a' requires a password (rule missing)"; ok=0
         fi
     done
+    # Pinned cores, judged by the repository script: the same validation setup
+    # applies (root-owned, not writable by others, a well-formed pair).
+    local cores
+    if [ -e "$STATE_FILE" ]; then
+        echo "pinned cores    : (measurement mode active; using $("$SRC" cores --list 2>/dev/null))"
+    elif [ ! -e "$PIN_FILE" ] && [ ! -L "$PIN_FILE" ]; then
+        echo "pinned cores    : [!] NOT pinned — the pair can change after a reboot"
+        echo "                  pin with: sudo $0 --pin A,B"
+        ok=0
+    elif cores="$("$SRC" cores --list 2>&1)"; then
+        echo "pinned cores    : $cores  ($PIN_FILE, $(stat -c '%U:%G %a' -- "$PIN_FILE"))"
+    else
+        echo "pinned cores    : [!] $PIN_FILE is REFUSED: ${cores##*\[!\] }"
+        ok=0
+    fi
     if [ "$ok" = 0 ] && ! sudo -n -l "$DEST" setup >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
         echo
         echo "to add the rule:  sudo visudo -f $SUDOERS_FILE"
@@ -104,8 +130,50 @@ install_copy() {
     install -o root -g root -m 0755 -- "$SRC" "$DEST"
     [ "$(sha "$DEST")" = "$(sha "$SRC")" ] || die "installed copy does not match $SRC"
     echo "[+] installed $DEST"
-    echo
-    check || true
+}
+
+# Pin the measurement cores. $1 = "A,B", A being the solo core.
+pin_cores() {
+    local pair="${1:-}" a b old="" had_old=0 tmp got
+    # Format first, so a typo is reported before anyone is asked for a password.
+    [[ "$pair" =~ ^[0-9]{1,4},[0-9]{1,4}$ ]] \
+        || die "--pin expects two CPU ids such as 3,1 (solo core first), got '$pair'"
+    [ "$(id -u)" -eq 0 ] || die "pinning needs root: sudo $0 --pin $pair"
+    # With siblings offline a pair cannot be validated against the real topology.
+    [ -e "$STATE_FILE" ] && die "measurement mode is active; run 'sudo $DEST restore' first"
+    a="$((10#${pair%,*}))"; b="$((10#${pair#*,}))"
+    pair="$a,$b"
+
+    # The installed command must understand the config before it is written.
+    install_copy
+
+    if [ -f "$PIN_FILE" ] && [ ! -L "$PIN_FILE" ]; then old="$(cat -- "$PIN_FILE")"; had_old=1; fi
+    # /etc is writable by root only, so this temporary file cannot be raced.
+    tmp="$(mktemp /etc/.matching-machine-bench.XXXXXX)"
+    {
+        echo "# Measurement cores for the Matching_Machine benchmarks, solo core first."
+        echo "# Written by scripts/install_bench_env.sh --pin; read by mm-bench-env setup."
+        echo "# Must stay root-owned and not group/world-writable, or it is refused."
+        echo "MEASURE_CPUS=$pair"
+    } > "$tmp"
+    chown root:root "$tmp"
+    chmod 0644 "$tmp"
+    mv -f -- "$tmp" "$PIN_FILE"
+
+    # One validator: let the installed command judge the file exactly as setup
+    # will. If it refuses the pair, put back whatever was there before.
+    if got="$("$DEST" cores --list 2>&1)" && [ "$got" = "$pair" ]; then
+        echo "[+] pinned measurement cores: $pair  ($PIN_FILE)"
+    else
+        if [ "$had_old" = 1 ]; then printf '%s\n' "$old" > "$PIN_FILE"; else rm -f -- "$PIN_FILE"; fi
+        die "the pair '$pair' was refused, pin left unchanged: ${got##*\[!\] }"
+    fi
+}
+
+unpin_cores() {
+    [ "$(id -u)" -eq 0 ] || die "unpinning needs root: sudo $0 --unpin"
+    rm -f -- "$PIN_FILE"
+    echo "[+] removed $PIN_FILE — cores are no longer pinned"
 }
 
 uninstall_copy() {
@@ -116,11 +184,14 @@ uninstall_copy() {
     rm -f -- "$DEST"
     echo "[+] removed $DEST"
     [ -e "$SUDOERS_FILE" ] && echo "[i] also remove the rule:  sudo rm $SUDOERS_FILE"
+    [ -e "$PIN_FILE" ] && echo "[i] the core pin is kept:   $PIN_FILE  (remove with --unpin)"
     return 0
 }
 
 case "${1:-}" in
-    "")          install_copy ;;
+    "")          install_copy; echo; check || true ;;
+    --pin)       pin_cores "${2:-}"; echo; check || true ;;
+    --unpin)     unpin_cores ;;
     --check)     check ;;
     --uninstall) uninstall_copy ;;
     *)           awk 'NR > 2 && /^# =====/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "$0"; exit 1 ;;
