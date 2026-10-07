@@ -153,6 +153,107 @@ new_case irqww <<< "$VALID_STATE"
 printf '9 0-7\n' > "$IRQ_FILE"; chmod 0666 "$IRQ_FILE"
 expect "world-writable IRQ file"              '! loads "$ME"'
 
+# ── pinned measurement cores ────────────────────────────────────────────────
+# Core ids come from the live topology, so nothing here assumes a particular
+# machine: two distinct physical cores, and one SMT sibling if there is one.
+mapfile -t PHYS < <(rank_cores 2>/dev/null | awk '{ print $3 }' | sort -n)
+A="${PHYS[0]}"; B="${PHYS[1]}"
+SIB="$(sibling_cpus 2>/dev/null | head -1)"
+
+# Config for one case, content from stdin. Sets PIN.
+new_pin() { PIN="$TMP/pin_$1"; cat > "$PIN"; chmod 0644 "$PIN"; }
+# pinned_cores for $PIN as "a,b" (empty if refused), and its bare status.
+pinned() { ( pinned_cores "$PIN" "$1" ) 2>/dev/null | paste -sd, -; }
+pin_ok() { ( pinned_cores "$PIN" "$1" ) >/dev/null 2>&1; }
+refuse_pin() { new_pin "$1" <<< "$2"; expect "$3" '! pin_ok "$ME"'; }
+# select_cores against a given config, with a deterministic stand-in for the
+# live ranking (which would otherwise make these tests depend on the moment).
+sel() {
+    ( PIN_FILE="$1"; TRUSTED_UID="${3:-$ME}"
+      rank_cores() { printf '0 0 %s x\n0 0 %s x\n' "$A" "$B"; }
+      select_cores "${2:-}" ) 2>/dev/null | paste -sd, -
+}
+sel_ok() {
+    ( PIN_FILE="$1"; TRUSTED_UID="${3:-$ME}"
+      rank_cores() { printf '0 0 %s x\n0 0 %s x\n' "$A" "$B"; }
+      select_cores "${2:-}" ) >/dev/null 2>&1
+}
+
+if [ "${#PHYS[@]}" -lt 2 ]; then
+    echo "== pinned cores: SKIPPED (needs at least two physical cores online)"
+else
+    echo "== pinned cores: a valid config is used, order preserved"
+    new_pin valid <<< "MEASURE_CPUS=$A,$B"
+    expect "pair parsed"                          '[ "$(pinned "$ME")" = "$A,$B" ]'
+    new_pin order <<< "MEASURE_CPUS=$B,$A"
+    expect "order preserved (solo core first)"    '[ "$(pinned "$ME")" = "$B,$A" ]'
+    new_pin quoted <<< "MEASURE_CPUS=\"$A,$B\""
+    expect "quoted value accepted"                '[ "$(pinned "$ME")" = "$A,$B" ]'
+    printf '# a comment\n\nMEASURE_CPUS=%s,%s\n' "$A" "$B" > "$TMP/pin_comment"; chmod 0644 "$TMP/pin_comment"
+    PIN="$TMP/pin_comment"
+    expect "comments and blank lines ignored"     '[ "$(pinned "$ME")" = "$A,$B" ]'
+    PIN="$TMP/pin_does_not_exist"
+    expect "no config -> nothing, and not an error" 'pin_ok "$ME" && [ -z "$(pinned "$ME")" ]'
+
+    echo "== pinned cores: injection is never executed"
+    new_pin inj1 <<EOF
+MEASURE_CPUS=\$(touch $TMP/pwned_pin1)
+EOF
+    expect "command substitution refused"         '! pin_ok "$ME"'
+    new_pin inj2 <<EOF
+MEASURE_CPUS=$A,$B;touch $TMP/pwned_pin2
+EOF
+    expect "';'-chained command refused"          '! pin_ok "$ME"'
+    new_pin inj3 <<EOF
+MEASURE_CPUS=a[\$(touch $TMP/pwned_pin3)],$B
+EOF
+    expect "arithmetic injection refused"         '! pin_ok "$ME"'
+    new_pin inj4 <<EOF
+MEASURE_CPUS=$A,\`touch $TMP/pwned_pin4\`
+EOF
+    expect "backticks refused"                    '! pin_ok "$ME"'
+    expect "no payload executed"                  '! ls "$TMP"/pwned_pin* >/dev/null 2>&1'
+
+    echo "== pinned cores: malformed pairs are refused"
+    refuse_pin one    "MEASURE_CPUS=$A"           "a single core"
+    refuse_pin three  "MEASURE_CPUS=$A,$B,$A"     "three cores"
+    refuse_pin same   "MEASURE_CPUS=$A,$A"        "the same core twice"
+    refuse_pin nocpu  "MEASURE_CPUS=$A,9999"      "a core that does not exist"
+    refuse_pin range  "MEASURE_CPUS=0-3"          "a range instead of a pair"
+    refuse_pin space  "MEASURE_CPUS=$A, $B"       "a pair containing a space"
+    refuse_pin empty  "MEASURE_CPUS="             "an empty value"
+    refuse_pin nokey  "SOMETHING_ELSE=1"          "a config without MEASURE_CPUS"
+    if [ -n "$SIB" ]; then
+        refuse_pin sib "MEASURE_CPUS=$(first_sibling "$SIB"),$SIB" "an SMT sibling (it would be offlined)"
+    else
+        echo "  SKIP  SMT sibling case (no SMT siblings online)"
+    fi
+
+    echo "== pinned cores: an untrusted config is refused"
+    new_pin owner <<< "MEASURE_CPUS=$A,$B"
+    expect "config not owned by the expected uid" '! pin_ok 0'
+    new_pin ww <<< "MEASURE_CPUS=$A,$B"; chmod 0666 "$PIN"
+    expect "world-writable config"                '! pin_ok "$ME"'
+    new_pin gw <<< "MEASURE_CPUS=$A,$B"; chmod 0664 "$PIN"
+    expect "group-writable config"                '! pin_ok "$ME"'
+    new_pin link <<< "MEASURE_CPUS=$A,$B"; mv "$PIN" "$PIN.real"; ln -s "$PIN.real" "$PIN"
+    expect "symlinked config"                     '! pin_ok "$ME"'
+
+    echo "== selection: override > pinned > ranking, never a silent fallback"
+    # the stand-in ranking yields A,B; pin the reverse so the two are distinguishable
+    new_pin sel <<< "MEASURE_CPUS=$B,$A"
+    expect "pinned config wins over the ranking"  '[ "$(sel "$PIN")" = "$B,$A" ]'
+    expect "explicit override wins over pinned"   '[ "$(sel "$PIN" "$A,$B")" = "$A,$B" ]'
+    expect "nothing pinned -> ranking is used"    '[ "$(sel "$TMP/pin_does_not_exist")" = "$A,$B" ]'
+    new_pin selbad <<< "MEASURE_CPUS=garbage"
+    expect "malformed config is an error"         '! sel_ok "$PIN"'
+    expect "...and selects nothing (no fallback to ranking)" '[ -z "$(sel "$PIN")" ]'
+    new_pin selown <<< "MEASURE_CPUS=$B,$A"
+    expect "untrusted config is an error"         '! sel_ok "$PIN" "" 0'
+    expect "...and selects nothing (no fallback to ranking)" '[ -z "$(sel "$PIN" "" 0)" ]'
+    expect "malformed override is an error"       '! sel_ok "$TMP/pin_does_not_exist" "$A"'
+fi
+
 echo "== script contains no source/eval of its own"
 expect "no 'source' or 'eval' outside comments" \
     '[ "$(grep -nwE "source|eval" "$ROOT/scripts/bench_env.sh" | grep -vcE "^[0-9]+:\s*#")" -eq 0 ]'

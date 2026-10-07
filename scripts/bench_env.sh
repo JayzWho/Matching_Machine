@@ -18,6 +18,7 @@
 #        ./scripts/bench_env.sh cores              measurement-core ranking
 #        ./scripts/bench_env.sh cores --list       selected cores, best first
 #        ./scripts/bench_env.sh cores --rationale  ranking as one line
+#        ./scripts/bench_env.sh cores --selection  pinned / ranked / override
 #
 # What setup changes, and why:
 #
@@ -43,16 +44,24 @@
 #
 # How the measurement cores are chosen:
 #
-#   Physical cores are ranked by thermal throttle history (core_throttle_count
-#   since boot), then by device-interrupt load, and the best two are used.
-#   Never simply "the lowest two CPU numbers": on the machine this was written
-#   for, cpu0 is the effective target of the ACPI interrupt (1.68M deliveries
-#   against 0 on cpu1) and has throttled 13,915 times against cpu1's 17, and
-#   with irqbalance not running none of that corrects itself.
+#   Measurements are only comparable if they run on the same cores, so the pair
+#   is PINNED in a root-owned config file, /etc/matching-machine-bench.conf
+#   (written by `install_bench_env.sh --pin A,B`). Order matters: the first
+#   core runs the single-threaded benchmarks. Priority:
 #
-#   This ranking is a heuristic. Throttle history resets on reboot. What
-#   decides whether a measurement is valid is the throttle delta checked by
-#   run_anchor.sh across the run itself, not this ranking.
+#     1. `setup --cpus A,B`   explicit override (needs a password; recorded)
+#     2. the pinned config    the normal case
+#     3. live ranking         only when nothing is pinned, with a warning
+#
+#   A config that exists but is untrusted or malformed is an ERROR. It is never
+#   a silent fallback to ranking, because that would quietly change the cores.
+#
+#   The live ranking orders physical cores by thermal throttle history
+#   (core_throttle_count since boot), then device-interrupt load. It is a tool
+#   for choosing a pair on a new machine, not a selection mechanism: its inputs
+#   reset on every reboot, so it can pick different cores from one boot to the
+#   next. That is exactly what happened here — it chose cpu3,cpu1 for the anchor
+#   measurement and cpu0,cpu2 after a reboot — and is why the pair is pinned.
 #
 # Security model (this script is meant to be runnable via a NOPASSWD rule):
 #
@@ -71,6 +80,9 @@
 #     strict pattern (numbers, CPU lists, hex masks, governor names). Values
 #     are pattern-checked BEFORE any arithmetic, because bash arithmetic on an
 #     untrusted string can execute commands (e.g. a[$(cmd)]).
+#   - The pinned-cores config is read by this root-run script, so it gets the
+#     same treatment: root-owned, not a symlink, not group/world-writable, and
+#     its one value must match a strict pattern before it is used.
 #   - As root the script pins PATH and umask instead of inheriting them.
 #
 # See docs/AUDIT.md for why this matters to the measurements.
@@ -90,6 +102,12 @@ STATE_FILE="$STATE_DIR/state"
 IRQ_FILE="$STATE_DIR/irq"
 # Written by versions before the privilege hardening. Never trusted.
 LEGACY_STATE_FILE="/var/tmp/matching_machine_bench_env.state"
+# Pinned measurement cores, e.g. "MEASURE_CPUS=3,1" (solo core first).
+PIN_FILE="/etc/matching-machine-bench.conf"
+# Owner the config file must have. Assigned here unconditionally, so it cannot
+# be injected through the environment; the tests override it after sourcing,
+# to point the same checks at files they own.
+TRUSTED_UID=0
 PSTATE_DIR="/sys/devices/system/cpu/intel_pstate"
 CPU_DIR="/sys/devices/system/cpu"
 
@@ -303,22 +321,85 @@ rank_rationale() {
                       END { print "" }'
 }
 
-# Two measurement cores, best first, one per line. $1 = optional override list.
+# Validate an ordered pair of measurement cores such as "3,1": strict format,
+# both exist and are online, distinct, and neither is an SMT sibling (siblings
+# are offlined by setup). Prints the two ids, one per line, order preserved.
+#   $1 = pair, $2 = where it came from (for error messages)
+validate_core_pair() {
+    local pair="$1" what="$2" a b c
+    [[ "$pair" =~ ^[0-9]{1,4},[0-9]{1,4}$ ]] \
+        || die "$what: expected exactly two CPU ids such as '3,1', got '$pair'"
+    a="$((10#${pair%,*}))"; b="$((10#${pair#*,}))"
+    [ "$a" != "$b" ] || die "$what: the two cores must differ"
+    for c in "$a" "$b"; do
+        [ -d "$CPU_DIR/cpu$c" ] || die "$what: cpu$c does not exist"
+        if [ -e "$CPU_DIR/cpu$c/online" ] && [ "$(rd "$CPU_DIR/cpu$c/online")" != "1" ]; then
+            die "$what: cpu$c is offline"
+        fi
+        [ "$c" = "$(first_sibling "$c")" ] \
+            || die "$what: cpu$c is an SMT sibling and would be offlined; use cpu$(first_sibling "$c")"
+    done
+    printf '%s\n%s\n' "$a" "$b"
+}
+
+# The pinned pair from the config, one id per line, or nothing when no config
+# exists. A config that exists but is untrusted or malformed is fatal: falling
+# back to ranking would silently change the measurement cores.
+#   $1 = config path, $2 = expected owner uid
+pinned_cores() {
+    local f="$1" uid="$2" v
+    if [ ! -e "$f" ] && [ ! -L "$f" ]; then return 0; fi
+    require_trusted "$f" "$uid"
+    [ -f "$f" ] || die "$f is not a regular file"
+    v="$(kv_get "$f" MEASURE_CPUS)"
+    [ -n "$v" ] || die "$f has no MEASURE_CPUS entry"
+    validate_core_pair "$v" "$f"
+}
+
+# Two measurement cores, solo core first, one per line.
+# Priority: explicit override > pinned config > live ranking.
+#   $1 = optional override pair
 select_cores() {
-    local override="${1:-}" c picked=()
+    local override="${1:-}" pinned
     if [ -n "$override" ]; then
-        for c in $(expand_list "$override"); do
-            [ -d "$CPU_DIR/cpu$c" ] || die "--cpus: cpu$c does not exist"
-            [ "$c" = "$(first_sibling "$c")" ] \
-                || die "--cpus: cpu$c is an SMT sibling and would be offlined; use cpu$(first_sibling "$c")"
-            picked+=("$c")
-        done
-        [ "${#picked[@]}" -eq 2 ] || die "--cpus needs exactly two cores, got '${override}'"
-        [ "${picked[0]}" != "${picked[1]}" ] || die "--cpus: the two cores must differ"
-        printf '%s\n' "${picked[@]}"
+        validate_core_pair "$override" "--cpus"
+        return
+    fi
+    # The status MUST be checked explicitly. pinned_cores reports a bad config by
+    # exiting, but that only ends the $(...) subshell; bash does not carry
+    # `set -e` into command substitutions, so without this check a refused
+    # config would leave $pinned empty and fall through to the ranking below —
+    # the silent change of cores this whole mechanism exists to prevent.
+    if ! pinned="$(pinned_cores "$PIN_FILE" "$TRUSTED_UID")"; then
+        return 1
+    fi
+    if [ -n "$pinned" ]; then
+        printf '%s\n' "$pinned"
         return
     fi
     rank_cores | head -2 | awk '{ print $3 }'
+}
+
+# The current selection as "a,b". Exits non-zero if there is no valid
+# selection; select_cores has already said why. Callers use this instead of
+# piping select_cores, so a failure can never be mistaken for an empty answer.
+#   $1 = optional override pair
+selected_pair() {
+    local cores
+    cores="$(select_cores "${1:-}")" || exit 1
+    [ "$(grep -c . <<< "$cores")" -eq 2 ] || die "could not select two measurement cores"
+    paste -sd, - <<< "$cores"
+}
+
+# Where the selection came from. $1 = optional override pair.
+selection_source() {
+    if [ -n "${1:-}" ]; then
+        echo "override (--cpus $1)"
+    elif [ -e "$PIN_FILE" ] || [ -L "$PIN_FILE" ]; then
+        echo "pinned ($PIN_FILE)"
+    else
+        echo "ranked (nothing pinned)"
+    fi
 }
 
 cpus_to_mask() {
@@ -396,6 +477,7 @@ cmd_cores() {
         case "$mode" in
             --list)      state_get MEASURE_CPUS | tr ' ' ','; return ;;
             --rationale) state_get MEASURE_RATIONALE; return ;;
+            --selection) state_get MEASURE_SOURCE; return ;;
         esac
         echo "measurement mode ACTIVE — cores selected at setup:"
         echo "  cores   : $(state_get MEASURE_CPUS)  ($(state_get MEASURE_SOURCE))"
@@ -403,15 +485,24 @@ cmd_cores() {
         return
     fi
     case "$mode" in
-        --list)      select_cores | paste -sd, -; return ;;
+        --list)      selected_pair; return ;;
         --rationale) rank_rationale; return ;;
+        --selection) selection_source; return ;;
         "") ;;
         *) die "unknown option for cores: $mode" ;;
     esac
-    echo "physical cores, best measurement candidate first:"
+    local chosen
+    chosen="$(selected_pair)" || exit 1
+    echo "measurement cores: $chosen  ($(selection_source))"
+    if [ ! -e "$PIN_FILE" ] && [ ! -L "$PIN_FILE" ]; then
+        echo "  [!] NOT pinned: this choice comes from the live ranking below, whose inputs"
+        echo "      reset on reboot, so it can change between boots and break comparability."
+        echo "      Pin a pair with:  sudo ./scripts/install_bench_env.sh --pin A,B"
+    fi
+    echo
+    echo "live ranking of physical cores (advisory, best candidate first):"
     printf "  %-6s %-10s %-10s %s\n" CPU SIBLINGS THROTTLE DEVICE_IRQS
     rank_cores | awk '{ printf "  cpu%-3s %-10s %-10s %s\n", $3, $4, $1, $2 }'
-    echo "selected: $(select_cores | paste -sd, -)"
     echo "(throttle = core_throttle_count since boot; device IRQs summed over both SMT threads)"
 }
 
@@ -436,9 +527,10 @@ cmd_setup() {
     # interrupt columns that disappear from /proc/interrupts once siblings go
     # offline, and interrupt counts that steering is about to change.
     local measure selection rationale sibs housekeeping="" c
-    measure="$(select_cores "$override" | tr '\n' ' ' | sed 's/ $//')"
+    measure="$(selected_pair "$override")" || exit 1
+    measure="${measure/,/ }"
     [ "$(wc -w <<< "$measure")" -eq 2 ] || die "could not select two measurement cores"
-    if [ -n "$override" ]; then selection="override (--cpus $override)"; else selection="ranked"; fi
+    selection="$(selection_source "$override")"
     rationale="$(rank_rationale)"
     sibs="$(sibling_cpus | tr '\n' ' ' | sed 's/ $//')"
     for c in $(online_cpus); do
@@ -449,6 +541,12 @@ cmd_setup() {
     housekeeping="${housekeeping# }"
 
     echo "[*] measurement cores : $measure  ($selection)"
+    case "$selection" in
+        ranked*)
+            warn "no cores are pinned: this selection depends on since-boot counters and"
+            warn "can differ after a reboot, making results incomparable with earlier runs."
+            warn "pin a pair with: sudo ./scripts/install_bench_env.sh --pin A,B" ;;
+    esac
     echo "    ranking           : $rationale"
     echo "[*] housekeeping cores: ${housekeeping:-(none)}"
     echo "[*] SMT siblings      : ${sibs:-(none)}"
