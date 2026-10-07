@@ -53,6 +53,90 @@ rule_line() {
     printf '%s ALL=(root) NOPASSWD: %s setup, %s restore\n' "$1" "$DEST" "$DEST"
 }
 
+# Commands a user may run AS ROOT WITHOUT A PASSWORD, one per line, extracted
+# from a `sudo -l` listing on stdin.
+#
+# The listing is parsed on purpose. `sudo -n -l CMD` does NOT answer "can CMD
+# run without a password": it succeeds for any command that some rule permits,
+# password or not, as soon as listing itself needs no password — which is the
+# case once a single NOPASSWD rule exists. Next to the usual `(ALL : ALL) ALL`
+# entry it therefore reports every command as allowed. An earlier version of
+# this check used that probe and could not tell the two apart.
+#
+# Listing format, one entry per line (long entries may be wrapped):
+#     (runas-users[ : groups]) [TAG: ...] command[, [TAG: ...] command ...]
+# A tag such as NOPASSWD: applies to the commands after it until PASSWD: resets
+# it. Entries whose runas users include neither root nor ALL are ignored.
+nopasswd_commands() {
+    awk '
+        function flush(    runas, rest, close_at, n, i, m, j, u, ok, nopass, item, tag) {
+            if (cur == "") return
+            sub(/^[ \t]+/, "", cur)
+            close_at = index(cur, ")")
+            if (substr(cur, 1, 1) != "(" || close_at == 0) { cur = ""; return }
+            runas = substr(cur, 2, close_at - 2)
+            rest  = substr(cur, close_at + 1)
+            sub(/[ \t]*:.*$/, "", runas)                      # users only, drop groups
+            ok = 0
+            m = split(runas, users, /[ \t]*,[ \t]*/)
+            for (j = 1; j <= m; j++) {
+                u = users[j]; gsub(/^[ \t]+|[ \t]+$/, "", u)
+                if (u == "root" || u == "ALL") ok = 1
+            }
+            if (ok) {
+                nopass = 0
+                n = split(rest, items, /,[ \t]+/)
+                for (i = 1; i <= n; i++) {
+                    item = items[i]; gsub(/^[ \t]+|[ \t]+$/, "", item)
+                    while (match(item, /^[A-Z_]+:[ \t]*/)) {
+                        tag = substr(item, 1, RLENGTH); sub(/:[ \t]*$/, "", tag)
+                        if (tag == "NOPASSWD") nopass = 1
+                        if (tag == "PASSWD")   nopass = 0
+                        item = substr(item, RLENGTH + 1)
+                    }
+                    if (nopass && item != "") print item
+                }
+            }
+            cur = ""
+        }
+        /^[ \t]+\(/ { flush(); cur = $0; next }               # a new entry
+        /^[ \t]+/   { if (cur != "") cur = cur " " $0; next } # wrapped continuation
+                    { flush() }                               # header or blank line
+        END         { flush() }
+    '
+}
+
+# How "$DEST <action>" may run without a password, given nopasswd_commands
+# output: "exact" (the intended rule), "broad" (only through something wider —
+# NOPASSWD: ALL, the bare command with any arguments, or a wildcard), or "none".
+#   $1 = nopasswd_commands output, $2 = action
+rule_status() {
+    local granted="$1" want="$DEST $2" line
+    if grep -qxF -- "$want" <<< "$granted"; then echo exact; return; fi
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        # $line is deliberately unquoted on the right: sudoers wildcards are
+        # shell-style patterns, so this is a glob match. It is never executed.
+        # shellcheck disable=SC2053
+        if [ "$line" = ALL ] || [ "$line" = "$DEST" ] || [[ "$want" == $line ]]; then
+            echo broad; return
+        fi
+    done <<< "$granted"
+    echo none
+}
+
+# Password-free grants that are wider than the two intended commands.
+#   $1 = nopasswd_commands output
+broader_rules() {
+    local line
+    while IFS= read -r line; do
+        case "$line" in
+            "$DEST setup"|"$DEST restore") ;;
+            ALL|"$DEST"|"$DEST "*) printf '%s\n' "$line" ;;
+        esac
+    done <<< "$1"
+}
+
 check() {
     local user="${SUDO_USER:-$(id -un)}" s_repo s_inst ok=1
     s_repo="$(sha "$SRC")"
@@ -70,18 +154,36 @@ check() {
     else
         echo "installed copy  : (not installed) — run: sudo $0"; ok=0
     fi
-    # `sudo -n -l CMD` succeeds only if CMD may run without a password prompt.
-    local a
+    # Which commands are password-free is read from the rule listing itself;
+    # see nopasswd_commands for why `sudo -n -l CMD` cannot be used for this.
+    local a listing="" granted="" listed=1 rule_missing=0 wide
+    if [ "$(id -u)" -eq 0 ]; then
+        listing="$(sudo -l -U "$user" 2>/dev/null)" || listed=0
+    else
+        # Fails when listing itself needs a password, i.e. (with sudo's default
+        # listpw=any) when the user has no NOPASSWD rule at all.
+        listing="$(sudo -n -l 2>/dev/null)" || listed=0
+    fi
+    [ "$listed" = 1 ] && granted="$(nopasswd_commands <<< "$listing")"
     for a in setup restore; do
-        if [ "$(id -u)" -eq 0 ]; then
-            if sudo -l -U "$user" -n "$DEST" "$a" >/dev/null 2>&1; then echo "sudo rule       : '$a' allowed for $user"
-            else echo "sudo rule       : '$a' NOT allowed for $user"; ok=0; fi
-        elif sudo -n -l "$DEST" "$a" >/dev/null 2>&1; then
-            echo "sudo rule       : '$a' allowed without password"
-        else
-            echo "sudo rule       : '$a' requires a password (rule missing)"; ok=0
-        fi
+        case "$(rule_status "$granted" "$a")" in
+            exact) echo "sudo rule       : '$a' allowed without password" ;;
+            broad) echo "sudo rule       : '$a' allowed without password, but only via a BROADER rule (below)" ;;
+            *)     rule_missing=1; ok=0
+                   if [ "$listed" = 1 ]; then echo "sudo rule       : '$a' requires a password (rule missing)"
+                   else echo "sudo rule       : '$a' requires a password (no password-free rule can be listed)"; fi ;;
+        esac
     done
+    while IFS= read -r wide; do
+        [ -n "$wide" ] || continue
+        if [ "$wide" = ALL ]; then
+            # The machine owner's policy, not this tool's rule: report, do not fail.
+            echo "  [!] note: a 'NOPASSWD: ALL' rule makes EVERY command password-free for $user"
+        else
+            echo "  [!] BROADER THAN INTENDED: '$wide' is password-free; only 'setup' and 'restore' should be"
+            ok=0
+        fi
+    done <<< "$(broader_rules "$granted")"
     # Pinned cores, judged by the repository script: the same validation setup
     # applies (root-owned, not writable by others, a well-formed pair).
     local cores
@@ -97,7 +199,7 @@ check() {
         echo "pinned cores    : [!] $PIN_FILE is REFUSED: ${cores##*\[!\] }"
         ok=0
     fi
-    if [ "$ok" = 0 ] && ! sudo -n -l "$DEST" setup >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+    if [ "$rule_missing" = 1 ] && [ "$(id -u)" -ne 0 ]; then
         echo
         echo "to add the rule:  sudo visudo -f $SUDOERS_FILE"
         echo "with the line:    $(rule_line "$user")"
@@ -114,15 +216,17 @@ install_copy() {
     # run unprivileged, as the user who invoked sudo.
     local user="${SUDO_USER:-}"
     if [ -n "$user" ] && [ "$user" != root ]; then
-        echo "[*] running scripts/test_bench_env.sh as $user..."
         # Output is captured in memory: a root process must not write to a
         # predictable path in a world-writable directory like /tmp.
-        local out
-        if ! out="$(runuser -u "$user" -- "$ROOT/scripts/test_bench_env.sh" 2>&1)"; then
-            printf '%s\n' "$out"
-            die "hardening tests failed; not installing"
-        fi
-        printf '%s\n' "$out" | tail -1
+        local out t
+        for t in test_bench_env.sh test_install_bench_env.sh; do
+            echo "[*] running scripts/$t as $user..."
+            if ! out="$(runuser -u "$user" -- "$ROOT/scripts/$t" 2>&1)"; then
+                printf '%s\n' "$out"
+                die "scripts/$t failed; not installing"
+            fi
+            printf '%s\n' "$out" | tail -1
+        done
     else
         echo "[!] could not determine the invoking user; hardening tests skipped"
     fi
@@ -188,11 +292,19 @@ uninstall_copy() {
     return 0
 }
 
-case "${1:-}" in
-    "")          install_copy; echo; check || true ;;
-    --pin)       pin_cores "${2:-}"; echo; check || true ;;
-    --unpin)     unpin_cores ;;
-    --check)     check ;;
-    --uninstall) uninstall_copy ;;
-    *)           awk 'NR > 2 && /^# =====/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "$0"; exit 1 ;;
-esac
+main() {
+    case "${1:-}" in
+        "")          install_copy; echo; check || true ;;
+        --pin)       pin_cores "${2:-}"; echo; check || true ;;
+        --unpin)     unpin_cores ;;
+        --check)     check ;;
+        --uninstall) uninstall_copy ;;
+        *)           awk 'NR > 2 && /^# =====/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "$0"; exit 1 ;;
+    esac
+}
+
+# Only dispatch when executed; when sourced (scripts/test_install_bench_env.sh)
+# the file just defines its functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
