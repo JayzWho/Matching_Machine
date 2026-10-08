@@ -1,0 +1,3 @@
+# The repository ignores *.log, but here a log is raw benchmark evidence: the
+# latency percentiles are printed to stdout and exist nowhere else.
+!*.log
