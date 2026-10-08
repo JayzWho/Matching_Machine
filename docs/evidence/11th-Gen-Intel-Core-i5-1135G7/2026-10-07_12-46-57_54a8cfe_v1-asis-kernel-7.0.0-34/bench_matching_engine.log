@@ -1,0 +1,182 @@
+2026-10-07T12:51:26-04:00
+Running /home/jz/projects/personal/Matching_Machine/build/release/bench_matching_engine
+Run on (4 X 2399.97 MHz CPU s)
+CPU Caches:
+  L1 Data 48 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1280 KiB (x4)
+  L3 Unified 8192 KiB (x1)
+Load Average: 1.64, 1.15, 0.62
+------------------------------------------------------------------------------------------------------------
+Benchmark                                                  Time             CPU   Iterations UserCounters...
+------------------------------------------------------------------------------------------------------------
+BM_Pipeline_Throughput/10000/iterations:3               3.21 ms        0.054 ms            3 items_per_second=186.505M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3               2.26 ms        0.035 ms            3 items_per_second=286.914M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3               2.27 ms        0.039 ms            3 items_per_second=258.9M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3               2.27 ms        0.036 ms            3 items_per_second=277.559M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3               2.51 ms        0.037 ms            3 items_per_second=269.472M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3               2.26 ms        0.038 ms            3 items_per_second=259.862M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3               2.35 ms        0.034 ms            3 items_per_second=290.951M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3               2.32 ms        0.039 ms            3 items_per_second=258.162M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3               2.23 ms        0.034 ms            3 items_per_second=291.098M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3               2.51 ms        0.037 ms            3 items_per_second=268.868M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3_mean          2.42 ms        0.038 ms           10 items_per_second=264.829M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3_median        2.30 ms        0.037 ms           10 items_per_second=269.17M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3_stddev       0.297 ms        0.006 ms           10 items_per_second=30.3665M/s orders=10000
+BM_Pipeline_Throughput/10000/iterations:3_cv           12.26 %         14.70 %            10 items_per_second=11.47% orders=10000
+BM_Pipeline_Throughput/50000/iterations:3               13.4 ms        0.061 ms            3 items_per_second=816.767M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3               12.5 ms        0.053 ms            3 items_per_second=944.87M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3               12.6 ms        0.055 ms            3 items_per_second=916.461M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3               12.4 ms        0.056 ms            3 items_per_second=887.595M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3               12.4 ms        0.057 ms            3 items_per_second=875.795M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3               12.8 ms        0.052 ms            3 items_per_second=952.859M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3               12.6 ms        0.049 ms            3 items_per_second=1.03011G/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3               12.7 ms        0.062 ms            3 items_per_second=812.33M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3               12.7 ms        0.057 ms            3 items_per_second=870.357M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3               12.5 ms        0.050 ms            3 items_per_second=998.549M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3_mean          12.7 ms        0.055 ms           10 items_per_second=910.57M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3_median        12.6 ms        0.055 ms           10 items_per_second=902.028M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3_stddev       0.289 ms        0.004 ms           10 items_per_second=72.1379M/s orders=50000
+BM_Pipeline_Throughput/50000/iterations:3_cv            2.29 %          7.87 %            10 items_per_second=7.92% orders=50000
+BM_Pipeline_Throughput/100000/iterations:3              27.4 ms        0.061 ms            3 items_per_second=1.63001G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3              26.6 ms        0.065 ms            3 items_per_second=1.54793G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3              26.8 ms        0.059 ms            3 items_per_second=1.70729G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3              27.0 ms        0.050 ms            3 items_per_second=1.98677G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3              26.7 ms        0.076 ms            3 items_per_second=1.31329G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3              26.9 ms        0.069 ms            3 items_per_second=1.45767G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3              26.8 ms        0.067 ms            3 items_per_second=1.49499G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3              26.7 ms        0.063 ms            3 items_per_second=1.59538G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3              27.2 ms        0.061 ms            3 items_per_second=1.63643G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3              27.3 ms        0.049 ms            3 items_per_second=2.02875G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3_mean         26.9 ms        0.062 ms           10 items_per_second=1.63985G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3_median       26.9 ms        0.062 ms           10 items_per_second=1.61269G/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3_stddev      0.282 ms        0.008 ms           10 items_per_second=222.984M/s orders=100000
+BM_Pipeline_Throughput/100000/iterations:3_cv           1.05 %         13.02 %            10 items_per_second=13.60% orders=100000
+BM_SingleThread_Baseline                                1398 us         1398 us          501 items_per_second=7.15286M/s single-thread noalloc
+BM_SingleThread_Baseline                                1399 us         1399 us          501 items_per_second=7.14652M/s single-thread noalloc
+BM_SingleThread_Baseline                                1400 us         1400 us          501 items_per_second=7.14218M/s single-thread noalloc
+BM_SingleThread_Baseline                                1398 us         1398 us          501 items_per_second=7.15146M/s single-thread noalloc
+BM_SingleThread_Baseline                                1399 us         1398 us          501 items_per_second=7.15094M/s single-thread noalloc
+BM_SingleThread_Baseline                                1400 us         1400 us          501 items_per_second=7.14531M/s single-thread noalloc
+BM_SingleThread_Baseline                                1399 us         1399 us          501 items_per_second=7.14826M/s single-thread noalloc
+BM_SingleThread_Baseline                                1403 us         1403 us          501 items_per_second=7.12717M/s single-thread noalloc
+BM_SingleThread_Baseline                                1404 us         1404 us          501 items_per_second=7.12352M/s single-thread noalloc
+BM_SingleThread_Baseline                                1405 us         1405 us          501 items_per_second=7.11846M/s single-thread noalloc
+BM_SingleThread_Baseline_mean                           1400 us         1400 us           10 items_per_second=7.14067M/s single-thread noalloc
+BM_SingleThread_Baseline_median                         1399 us         1399 us           10 items_per_second=7.14592M/s single-thread noalloc
+BM_SingleThread_Baseline_stddev                         2.49 us         2.50 us           10 items_per_second=12.719k/s single-thread noalloc
+BM_SingleThread_Baseline_cv                             0.18 %          0.18 %            10 items_per_second=0.18% single-thread noalloc
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2814371 cycles / 1128457 ns
+P95  : 3410108 cycles / 1367325 ns
+P99  : 3520868 cycles / 1411735 ns
+P999 : 3563509 cycles / 1428833 ns
+Max  : 3572195 cycles / 1432316 ns
+  (Trades produced: 62155)
+
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2698008 cycles / 1081800 ns
+P95  : 3329700 cycles / 1335084 ns
+P99  : 3454838 cycles / 1385260 ns
+P999 : 3473480 cycles / 1392735 ns
+Max  : 3477244 cycles / 1394244 ns
+  (Trades produced: 62155)
+
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2782397 cycles / 1115636 ns
+P95  : 2932139 cycles / 1175677 ns
+P99  : 2951942 cycles / 1183617 ns
+P999 : 2962352 cycles / 1187791 ns
+Max  : 2967058 cycles / 1189678 ns
+  (Trades produced: 62155)
+
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2904773 cycles / 1164704 ns
+P95  : 5190654 cycles / 2081257 ns
+P99  : 11582280 cycles / 4644058 ns
+P999 : 11649346 cycles / 4670949 ns
+Max  : 11655002 cycles / 4673217 ns
+  (Trades produced: 62155)
+
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2825282 cycles / 1132832 ns
+P95  : 3042000 cycles / 1219727 ns
+P99  : 3467607 cycles / 1390380 ns
+P999 : 3486275 cycles / 1397865 ns
+Max  : 3490798 cycles / 1399678 ns
+  (Trades produced: 62155)
+
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2875530 cycles / 1152979 ns
+P95  : 3188733 cycles / 1278562 ns
+P99  : 3769516 cycles / 1511434 ns
+P999 : 4198887 cycles / 1683595 ns
+Max  : 4237608 cycles / 1699121 ns
+  (Trades produced: 62155)
+
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2793908 cycles / 1120252 ns
+P95  : 3016457 cycles / 1209486 ns
+P99  : 3098125 cycles / 1242231 ns
+P999 : 3109385 cycles / 1246746 ns
+Max  : 3111903 cycles / 1247756 ns
+  (Trades produced: 62155)
+
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2728209 cycles / 1093909 ns
+P95  : 3235357 cycles / 1297256 ns
+P99  : 3392343 cycles / 1360202 ns
+P999 : 3423546 cycles / 1372713 ns
+Max  : 3436087 cycles / 1377741 ns
+  (Trades produced: 62155)
+
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2790642 cycles / 1118942 ns
+P95  : 3208295 cycles / 1286405 ns
+P99  : 3300625 cycles / 1323426 ns
+P999 : 3327162 cycles / 1334067 ns
+Max  : 3332399 cycles / 1336166 ns
+  (Trades produced: 62155)
+
+
+--- Pipeline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 2793095 cycles / 1119926 ns
+P95  : 3449248 cycles / 1383018 ns
+P99  : 3548327 cycles / 1422745 ns
+P999 : 3567567 cycles / 1430460 ns
+Max  : 3572646 cycles / 1432496 ns
+  (Trades produced: 62155)
+
+BM_Pipeline_LatencyReport/iterations:1                  5.29 ms         5.29 ms            1
+BM_Pipeline_LatencyReport/iterations:1                  5.51 ms         5.51 ms            1
+BM_Pipeline_LatencyReport/iterations:1                  5.75 ms         5.75 ms            1
+BM_Pipeline_LatencyReport/iterations:1                  5.20 ms         5.19 ms            1
+BM_Pipeline_LatencyReport/iterations:1                  5.93 ms         5.93 ms            1
+BM_Pipeline_LatencyReport/iterations:1                  5.50 ms         5.49 ms            1
+BM_Pipeline_LatencyReport/iterations:1                  5.81 ms         5.81 ms            1
+BM_Pipeline_LatencyReport/iterations:1                  5.31 ms         5.31 ms            1
+BM_Pipeline_LatencyReport/iterations:1                  5.25 ms         5.24 ms            1
+BM_Pipeline_LatencyReport/iterations:1                  5.20 ms         5.20 ms            1
+BM_Pipeline_LatencyReport/iterations:1_mean             5.47 ms         5.47 ms           10
+BM_Pipeline_LatencyReport/iterations:1_median           5.40 ms         5.40 ms           10
+BM_Pipeline_LatencyReport/iterations:1_stddev          0.270 ms        0.271 ms           10
+BM_Pipeline_LatencyReport/iterations:1_cv               4.94 %          4.95 %            10

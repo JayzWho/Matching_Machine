@@ -1,0 +1,110 @@
+2026-10-07T12:50:26-04:00
+Running /home/jz/projects/personal/Matching_Machine/build/release/bench_spsc_ring_buffer
+Run on (4 X 2400 MHz CPU s)
+CPU Caches:
+  L1 Data 48 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1280 KiB (x4)
+  L3 Unified 8192 KiB (x1)
+Load Average: 1.16, 0.99, 0.54
+----------------------------------------------------------------------------------------------------------------
+Benchmark                                                      Time             CPU   Iterations UserCounters...
+----------------------------------------------------------------------------------------------------------------
+BM_SPSC_SingleThread_Push                                   1.10 ns         1.10 ns    635650333 bytes_per_second=6.74285Gi/s items_per_second=905.009M/s
+BM_SPSC_SingleThread_Push                                   1.11 ns         1.11 ns    635650333 bytes_per_second=6.72496Gi/s items_per_second=902.608M/s
+BM_SPSC_SingleThread_Push                                   1.11 ns         1.11 ns    635650333 bytes_per_second=6.72728Gi/s items_per_second=902.92M/s
+BM_SPSC_SingleThread_Push                                   1.10 ns         1.10 ns    635650333 bytes_per_second=6.74879Gi/s items_per_second=905.808M/s
+BM_SPSC_SingleThread_Push                                   1.10 ns         1.10 ns    635650333 bytes_per_second=6.7517Gi/s items_per_second=906.198M/s
+BM_SPSC_SingleThread_Push                                   1.10 ns         1.10 ns    635650333 bytes_per_second=6.76012Gi/s items_per_second=907.328M/s
+BM_SPSC_SingleThread_Push                                   1.10 ns         1.10 ns    635650333 bytes_per_second=6.75604Gi/s items_per_second=906.78M/s
+BM_SPSC_SingleThread_Push                                   1.10 ns         1.10 ns    635650333 bytes_per_second=6.74511Gi/s items_per_second=905.314M/s
+BM_SPSC_SingleThread_Push                                   1.10 ns         1.10 ns    635650333 bytes_per_second=6.7617Gi/s items_per_second=907.54M/s
+BM_SPSC_SingleThread_Push                                   1.10 ns         1.10 ns    635650333 bytes_per_second=6.74935Gi/s items_per_second=905.882M/s
+BM_SPSC_SingleThread_Push_mean                              1.10 ns         1.10 ns           10 bytes_per_second=6.74679Gi/s items_per_second=905.539M/s
+BM_SPSC_SingleThread_Push_median                            1.10 ns         1.10 ns           10 bytes_per_second=6.74907Gi/s items_per_second=905.845M/s
+BM_SPSC_SingleThread_Push_stddev                           0.002 ns        0.002 ns           10 bytes_per_second=12.7543Mi/s items_per_second=1.67173M/s
+BM_SPSC_SingleThread_Push_cv                                0.18 %          0.18 %            10 bytes_per_second=0.18% items_per_second=0.18%
+BM_SPSC_SingleThread_PushPop                                1.56 ns         1.56 ns    451022587 items_per_second=641.402M/s
+BM_SPSC_SingleThread_PushPop                                1.57 ns         1.57 ns    451022587 items_per_second=638.849M/s
+BM_SPSC_SingleThread_PushPop                                1.56 ns         1.56 ns    451022587 items_per_second=640.127M/s
+BM_SPSC_SingleThread_PushPop                                1.56 ns         1.56 ns    451022587 items_per_second=641.224M/s
+BM_SPSC_SingleThread_PushPop                                1.56 ns         1.56 ns    451022587 items_per_second=640.371M/s
+BM_SPSC_SingleThread_PushPop                                1.55 ns         1.55 ns    451022587 items_per_second=643.712M/s
+BM_SPSC_SingleThread_PushPop                                1.56 ns         1.56 ns    451022587 items_per_second=640.288M/s
+BM_SPSC_SingleThread_PushPop                                1.57 ns         1.57 ns    451022587 items_per_second=636.329M/s
+BM_SPSC_SingleThread_PushPop                                1.56 ns         1.56 ns    451022587 items_per_second=641.85M/s
+BM_SPSC_SingleThread_PushPop                                1.55 ns         1.55 ns    451022587 items_per_second=644.466M/s
+BM_SPSC_SingleThread_PushPop_mean                           1.56 ns         1.56 ns           10 items_per_second=640.862M/s
+BM_SPSC_SingleThread_PushPop_median                         1.56 ns         1.56 ns           10 items_per_second=640.798M/s
+BM_SPSC_SingleThread_PushPop_stddev                        0.006 ns        0.006 ns           10 items_per_second=2.31461M/s
+BM_SPSC_SingleThread_PushPop_cv                             0.36 %          0.36 %            10 items_per_second=0.36%
+BM_SPSC_ProducerConsumer/10000/real_time                  308485 ns       269910 ns         2385 bytes_per_second=247.318Mi/s items_per_second=32.4165M/s
+BM_SPSC_ProducerConsumer/10000/real_time                  271378 ns       236326 ns         2385 bytes_per_second=281.135Mi/s items_per_second=36.849M/s
+BM_SPSC_ProducerConsumer/10000/real_time                  334091 ns       192768 ns         2385 bytes_per_second=228.363Mi/s items_per_second=29.932M/s
+BM_SPSC_ProducerConsumer/10000/real_time                  396075 ns       206087 ns         2385 bytes_per_second=192.625Mi/s items_per_second=25.2477M/s
+BM_SPSC_ProducerConsumer/10000/real_time                  385694 ns       211517 ns         2385 bytes_per_second=197.809Mi/s items_per_second=25.9273M/s
+BM_SPSC_ProducerConsumer/10000/real_time                  322253 ns       234477 ns         2385 bytes_per_second=236.752Mi/s items_per_second=31.0315M/s
+BM_SPSC_ProducerConsumer/10000/real_time                  317760 ns       247631 ns         2385 bytes_per_second=240.099Mi/s items_per_second=31.4703M/s
+BM_SPSC_ProducerConsumer/10000/real_time                  342834 ns       236223 ns         2385 bytes_per_second=222.539Mi/s items_per_second=29.1687M/s
+BM_SPSC_ProducerConsumer/10000/real_time                  329640 ns       232368 ns         2385 bytes_per_second=231.446Mi/s items_per_second=30.3361M/s
+BM_SPSC_ProducerConsumer/10000/real_time                  398872 ns       166983 ns         2385 bytes_per_second=191.274Mi/s items_per_second=25.0707M/s
+BM_SPSC_ProducerConsumer/10000/real_time_mean             340708 ns       223429 ns           10 bytes_per_second=226.936Mi/s items_per_second=29.745M/s
+BM_SPSC_ProducerConsumer/10000/real_time_median           331865 ns       233422 ns           10 bytes_per_second=229.905Mi/s items_per_second=30.1341M/s
+BM_SPSC_ProducerConsumer/10000/real_time_stddev            41305 ns        29528 ns           10 bytes_per_second=27.8122Mi/s items_per_second=3.64541M/s
+BM_SPSC_ProducerConsumer/10000/real_time_cv                12.12 %         13.22 %            10 bytes_per_second=12.26% items_per_second=12.26%
+BM_SPSC_ProducerConsumer/100000/real_time                3442587 ns      3275657 ns          214 bytes_per_second=221.618Mi/s items_per_second=29.0479M/s
+BM_SPSC_ProducerConsumer/100000/real_time                3843097 ns      3703151 ns          214 bytes_per_second=198.522Mi/s items_per_second=26.0207M/s
+BM_SPSC_ProducerConsumer/100000/real_time                3586759 ns      3456606 ns          214 bytes_per_second=212.71Mi/s items_per_second=27.8803M/s
+BM_SPSC_ProducerConsumer/100000/real_time                3902801 ns      3779010 ns          214 bytes_per_second=195.485Mi/s items_per_second=25.6226M/s
+BM_SPSC_ProducerConsumer/100000/real_time                3699222 ns      3571038 ns          214 bytes_per_second=206.243Mi/s items_per_second=27.0327M/s
+BM_SPSC_ProducerConsumer/100000/real_time                3746784 ns      3614628 ns          214 bytes_per_second=203.625Mi/s items_per_second=26.6896M/s
+BM_SPSC_ProducerConsumer/100000/real_time                3713578 ns      3581425 ns          214 bytes_per_second=205.446Mi/s items_per_second=26.9282M/s
+BM_SPSC_ProducerConsumer/100000/real_time                3610516 ns      3484701 ns          214 bytes_per_second=211.31Mi/s items_per_second=27.6969M/s
+BM_SPSC_ProducerConsumer/100000/real_time                3655307 ns      3520997 ns          214 bytes_per_second=208.721Mi/s items_per_second=27.3575M/s
+BM_SPSC_ProducerConsumer/100000/real_time                3746799 ns      3616225 ns          214 bytes_per_second=203.624Mi/s items_per_second=26.6894M/s
+BM_SPSC_ProducerConsumer/100000/real_time_mean           3694745 ns      3560344 ns           10 bytes_per_second=206.731Mi/s items_per_second=27.0966M/s
+BM_SPSC_ProducerConsumer/100000/real_time_median         3706400 ns      3576231 ns           10 bytes_per_second=205.845Mi/s items_per_second=26.9805M/s
+BM_SPSC_ProducerConsumer/100000/real_time_stddev          131226 ns       139010 ns           10 bytes_per_second=7.43377Mi/s items_per_second=974.359k/s
+BM_SPSC_ProducerConsumer/100000/real_time_cv                3.55 %          3.90 %            10 bytes_per_second=3.60% items_per_second=3.60%
+BM_Mutex_ProducerConsumer/10000/real_time                2988876 ns      2975478 ns          234 bytes_per_second=25.526Mi/s items_per_second=3.34574M/s
+BM_Mutex_ProducerConsumer/10000/real_time                2980222 ns      2966083 ns          234 bytes_per_second=25.6001Mi/s items_per_second=3.35545M/s
+BM_Mutex_ProducerConsumer/10000/real_time                3009884 ns      2997647 ns          234 bytes_per_second=25.3478Mi/s items_per_second=3.32239M/s
+BM_Mutex_ProducerConsumer/10000/real_time                2970401 ns      2955284 ns          234 bytes_per_second=25.6847Mi/s items_per_second=3.36655M/s
+BM_Mutex_ProducerConsumer/10000/real_time                2992956 ns      2978162 ns          234 bytes_per_second=25.4912Mi/s items_per_second=3.34118M/s
+BM_Mutex_ProducerConsumer/10000/real_time                2969469 ns      2952663 ns          234 bytes_per_second=25.6928Mi/s items_per_second=3.3676M/s
+BM_Mutex_ProducerConsumer/10000/real_time                2939853 ns      2925375 ns          234 bytes_per_second=25.9516Mi/s items_per_second=3.40153M/s
+BM_Mutex_ProducerConsumer/10000/real_time                2922279 ns      2908363 ns          234 bytes_per_second=26.1077Mi/s items_per_second=3.42199M/s
+BM_Mutex_ProducerConsumer/10000/real_time                2941485 ns      2926259 ns          234 bytes_per_second=25.9372Mi/s items_per_second=3.39964M/s
+BM_Mutex_ProducerConsumer/10000/real_time                2968746 ns      2955046 ns          234 bytes_per_second=25.699Mi/s items_per_second=3.36843M/s
+BM_Mutex_ProducerConsumer/10000/real_time_mean           2968417 ns      2954036 ns           10 bytes_per_second=25.7038Mi/s items_per_second=3.36905M/s
+BM_Mutex_ProducerConsumer/10000/real_time_median         2969935 ns      2955165 ns           10 bytes_per_second=25.6888Mi/s items_per_second=3.36708M/s
+BM_Mutex_ProducerConsumer/10000/real_time_stddev           26987 ns        27431 ns           10 bytes_per_second=239.872Ki/s items_per_second=30.7036k/s
+BM_Mutex_ProducerConsumer/10000/real_time_cv                0.91 %          0.93 %            10 bytes_per_second=0.91% items_per_second=0.91%
+BM_Mutex_ProducerConsumer/100000/real_time              29860949 ns     29792753 ns           23 bytes_per_second=25.5497Mi/s items_per_second=3.34886M/s
+BM_Mutex_ProducerConsumer/100000/real_time              29973192 ns     29910159 ns           23 bytes_per_second=25.4541Mi/s items_per_second=3.33631M/s
+BM_Mutex_ProducerConsumer/100000/real_time              29791954 ns     29666259 ns           23 bytes_per_second=25.6089Mi/s items_per_second=3.35661M/s
+BM_Mutex_ProducerConsumer/100000/real_time              30034443 ns     29970727 ns           23 bytes_per_second=25.4022Mi/s items_per_second=3.32951M/s
+BM_Mutex_ProducerConsumer/100000/real_time              30025381 ns     29961898 ns           23 bytes_per_second=25.4098Mi/s items_per_second=3.33052M/s
+BM_Mutex_ProducerConsumer/100000/real_time              28942918 ns     28856323 ns           23 bytes_per_second=26.3601Mi/s items_per_second=3.45508M/s
+BM_Mutex_ProducerConsumer/100000/real_time              29068959 ns     28987754 ns           23 bytes_per_second=26.2458Mi/s items_per_second=3.4401M/s
+BM_Mutex_ProducerConsumer/100000/real_time              29253507 ns     29170861 ns           23 bytes_per_second=26.0803Mi/s items_per_second=3.41839M/s
+BM_Mutex_ProducerConsumer/100000/real_time              28816985 ns     28728853 ns           23 bytes_per_second=26.4753Mi/s items_per_second=3.47018M/s
+BM_Mutex_ProducerConsumer/100000/real_time              29674137 ns     29608889 ns           23 bytes_per_second=25.7106Mi/s items_per_second=3.36994M/s
+BM_Mutex_ProducerConsumer/100000/real_time_mean         29544242 ns     29465448 ns           10 bytes_per_second=25.8297Mi/s items_per_second=3.38555M/s
+BM_Mutex_ProducerConsumer/100000/real_time_median       29733045 ns     29637574 ns           10 bytes_per_second=25.6597Mi/s items_per_second=3.36327M/s
+BM_Mutex_ProducerConsumer/100000/real_time_stddev         475540 ns       482602 ns           10 bytes_per_second=428.466Ki/s items_per_second=54.8436k/s
+BM_Mutex_ProducerConsumer/100000/real_time_cv               1.61 %          1.64 %            10 bytes_per_second=1.62% items_per_second=1.62%
+BM_SPSC_Order_ProducerConsumer/10000/real_time            573892 ns       567933 ns         1213 bytes_per_second=1.0386Gi/s items_per_second=17.4249M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time            584702 ns       579571 ns         1213 bytes_per_second=1.0194Gi/s items_per_second=17.1027M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time            579584 ns       574041 ns         1213 bytes_per_second=1.0284Gi/s items_per_second=17.2538M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time            583173 ns       577727 ns         1213 bytes_per_second=1.02207Gi/s items_per_second=17.1476M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time            582102 ns       576294 ns         1213 bytes_per_second=1.02396Gi/s items_per_second=17.1791M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time            574630 ns       568696 ns         1213 bytes_per_second=1.03727Gi/s items_per_second=17.4025M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time            577405 ns       571999 ns         1213 bytes_per_second=1.03228Gi/s items_per_second=17.3189M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time            580466 ns       575091 ns         1213 bytes_per_second=1.02684Gi/s items_per_second=17.2275M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time            563710 ns       554067 ns         1213 bytes_per_second=1.05736Gi/s items_per_second=17.7396M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time            578196 ns       572669 ns         1213 bytes_per_second=1.03087Gi/s items_per_second=17.2952M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time_mean       577786 ns       571809 ns           10 bytes_per_second=1.03171Gi/s items_per_second=17.3092M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time_median     578890 ns       573355 ns           10 bytes_per_second=1.02964Gi/s items_per_second=17.2745M/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time_stddev       6050 ns         7237 ns           10 bytes_per_second=11.2001Mi/s items_per_second=183.502k/s
+BM_SPSC_Order_ProducerConsumer/10000/real_time_cv           1.05 %          1.27 %            10 bytes_per_second=1.06% items_per_second=1.06%

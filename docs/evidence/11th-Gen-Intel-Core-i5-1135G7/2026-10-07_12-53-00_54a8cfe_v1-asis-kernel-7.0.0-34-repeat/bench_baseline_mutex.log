@@ -1,0 +1,158 @@
+2026-10-07T12:57:37-04:00
+Running /home/jz/projects/personal/Matching_Machine/build/release/bench_baseline_mutex
+Run on (4 X 445.151 MHz CPU s)
+CPU Caches:
+  L1 Data 48 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1280 KiB (x4)
+  L3 Unified 8192 KiB (x1)
+Load Average: 1.43, 1.16, 0.79
+-----------------------------------------------------------------------------------------------------------------
+Benchmark                                                       Time             CPU   Iterations UserCounters...
+-----------------------------------------------------------------------------------------------------------------
+BM_MutexPipeline_Throughput/10000/iterations:3               6.48 ms        0.067 ms            3 items_per_second=148.259M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3               6.01 ms        0.054 ms            3 items_per_second=183.845M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3               7.12 ms        0.051 ms            3 items_per_second=197.342M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3               6.81 ms        0.046 ms            3 items_per_second=217.067M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3               6.60 ms        0.047 ms            3 items_per_second=213.45M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3               5.95 ms        0.047 ms            3 items_per_second=210.729M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3               6.30 ms        0.054 ms            3 items_per_second=184.908M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3               6.32 ms        0.057 ms            3 items_per_second=176.761M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3               6.25 ms        0.055 ms            3 items_per_second=183.356M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3               6.74 ms        0.043 ms            3 items_per_second=230.785M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3_mean          6.46 ms        0.052 ms           10 items_per_second=194.65M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3_median        6.40 ms        0.052 ms           10 items_per_second=191.125M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3_stddev       0.367 ms        0.007 ms           10 items_per_second=24.1266M/s orders=10000
+BM_MutexPipeline_Throughput/10000/iterations:3_cv            5.68 %         13.34 %            10 items_per_second=12.39% orders=10000
+BM_MutexPipeline_Throughput/50000/iterations:3               34.4 ms        0.082 ms            3 items_per_second=611.095M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3               30.5 ms        0.074 ms            3 items_per_second=677.482M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3               32.1 ms        0.065 ms            3 items_per_second=774.881M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3               30.6 ms        0.073 ms            3 items_per_second=683.082M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3               32.5 ms        0.061 ms            3 items_per_second=815.585M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3               32.3 ms        0.062 ms            3 items_per_second=805.486M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3               32.2 ms        0.071 ms            3 items_per_second=702.346M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3               32.7 ms        0.072 ms            3 items_per_second=696.994M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3               31.5 ms        0.066 ms            3 items_per_second=756.014M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3               32.7 ms        0.072 ms            3 items_per_second=695.037M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3_mean          32.1 ms        0.070 ms           10 items_per_second=721.8M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3_median        32.3 ms        0.071 ms           10 items_per_second=699.67M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3_stddev        1.13 ms        0.006 ms           10 items_per_second=64.3049M/s orders=50000
+BM_MutexPipeline_Throughput/50000/iterations:3_cv            3.51 %          9.01 %            10 items_per_second=8.91% orders=50000
+BM_MutexPipeline_Throughput/100000/iterations:3              65.0 ms        0.079 ms            3 items_per_second=1.26178G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3              64.2 ms        0.084 ms            3 items_per_second=1.18353G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3              61.6 ms        0.087 ms            3 items_per_second=1.15325G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3              64.1 ms        0.076 ms            3 items_per_second=1.31724G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3              63.4 ms        0.086 ms            3 items_per_second=1.16832G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3              63.6 ms        0.070 ms            3 items_per_second=1.43441G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3              62.8 ms        0.069 ms            3 items_per_second=1.45028G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3              63.7 ms        0.087 ms            3 items_per_second=1.15084G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3              63.3 ms        0.080 ms            3 items_per_second=1.24813G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3              63.6 ms        0.093 ms            3 items_per_second=1.08027G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3_mean         63.5 ms        0.081 ms           10 items_per_second=1.24481G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3_median       63.6 ms        0.082 ms           10 items_per_second=1.21583G/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3_stddev      0.899 ms        0.008 ms           10 items_per_second=123.65M/s orders=100000
+BM_MutexPipeline_Throughput/100000/iterations:3_cv           1.41 %          9.53 %            10 items_per_second=9.93% orders=100000
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 150948 cycles /  60524 ns
+P95  : 2101117 cycles / 842469 ns
+P99  : 2157709 cycles / 865160 ns
+P999 : 2189939 cycles / 878083 ns
+Max  : 2202620 cycles / 883168 ns
+
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 1441633 cycles / 578040 ns
+P95  : 3554474 cycles / 1425210 ns
+P99  : 3690662 cycles / 1479816 ns
+P999 : 3741860 cycles / 1500345 ns
+Max  : 3759472 cycles / 1507407 ns
+
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 307330 cycles / 123228 ns
+P95  : 4542099 cycles / 1821211 ns
+P99  : 4597492 cycles / 1843421 ns
+P999 : 4643155 cycles / 1861730 ns
+Max  : 4660842 cycles / 1868822 ns
+
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 937323 cycles / 375831 ns
+P95  : 3052279 cycles / 1223849 ns
+P99  : 3111001 cycles / 1247394 ns
+P999 : 3217611 cycles / 1290141 ns
+Max  : 3229730 cycles / 1295000 ns
+
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 182229 cycles /  73067 ns
+P95  : 2999710 cycles / 1202771 ns
+P99  : 3120000 cycles / 1251002 ns
+P999 : 3161136 cycles / 1267496 ns
+Max  : 3176334 cycles / 1273590 ns
+
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 748186 cycles / 299994 ns
+P95  : 2527634 cycles / 1013486 ns
+P99  : 2827285 cycles / 1133635 ns
+P999 : 2952454 cycles / 1183823 ns
+Max  : 2972347 cycles / 1191799 ns
+
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 318808 cycles / 127830 ns
+P95  : 2056836 cycles / 824714 ns
+P99  : 2109029 cycles / 845641 ns
+P999 : 2154466 cycles / 863860 ns
+Max  : 2172368 cycles / 871038 ns
+
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 760111 cycles / 304776 ns
+P95  : 2814995 cycles / 1128707 ns
+P99  : 2929132 cycles / 1174472 ns
+P999 : 3008271 cycles / 1206203 ns
+Max  : 3021574 cycles / 1211537 ns
+
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 606610 cycles / 243228 ns
+P95  : 4179119 cycles / 1675669 ns
+P99  : 4404590 cycles / 1766075 ns
+P999 : 4456687 cycles / 1786964 ns
+Max  : 4476597 cycles / 1794947 ns
+
+
+--- Mutex Baseline Latency Report (100K orders) ---
+=== Latency Report (100000 samples) ===
+P50  : 1382846 cycles / 554469 ns
+P95  : 3655634 cycles / 1465771 ns
+P99  : 3998752 cycles / 1603349 ns
+P999 : 4127780 cycles / 1655084 ns
+Max  : 4140517 cycles / 1660191 ns
+
+BM_MutexPipeline_LatencyReport/iterations:1                  5.98 ms         5.97 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1                  5.23 ms         5.23 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1                  6.12 ms         6.11 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1                  5.31 ms         5.31 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1                  5.95 ms         5.95 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1                  5.32 ms         5.32 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1                  5.59 ms         5.59 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1                  5.28 ms         5.28 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1                  5.53 ms         5.53 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1                  5.00 ms         5.00 ms            1
+BM_MutexPipeline_LatencyReport/iterations:1_mean             5.53 ms         5.53 ms           10
+BM_MutexPipeline_LatencyReport/iterations:1_median           5.43 ms         5.42 ms           10
+BM_MutexPipeline_LatencyReport/iterations:1_stddev          0.373 ms        0.373 ms           10
+BM_MutexPipeline_LatencyReport/iterations:1_cv               6.75 %          6.75 %            10
