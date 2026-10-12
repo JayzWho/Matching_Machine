@@ -289,3 +289,10 @@ The audit found the following correct; they are not scheduled for rework:
 Phase 2 is load-bearing. Because the original environment is gone, the only way to
 attribute a change to code rather than to hardware is to measure the unfixed code on
 the new machine first.
+
+Status of phase 2 on 2026-10-12: the control group is the repeated-launch study
+indexed in [`evidence/README.md`](evidence/README.md). It replaces three
+single-launch recordings, which are kept at the tag `archive/control-runs-2026-10`.
+The study shows that the two-threaded benchmarks move by tens of percent from one
+launch to the next, so a phase-4 fix has to be compared over many launches of each
+version, not against one anchor run.
