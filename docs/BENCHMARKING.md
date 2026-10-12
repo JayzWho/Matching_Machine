@@ -40,7 +40,8 @@ can be compared with the unfixed code on the same machine.
 | `scripts/capture_env.sh` | no | Writes a JSON record of the commit, toolchain, build flags, CPU, frequency policy, thermal state and measurement cores |
 | `scripts/bench_record.py` | no | Records a study. Enters and leaves measurement mode itself through the sudoers rule |
 | `scripts/bench_report.py` | no | Turns a study directory into Markdown tables |
-| `scripts/test_bench_env.sh`, `scripts/test_install_bench_env.sh` | no | Tests of the two scripts above that touch privilege |
+| `scripts/test_bench_report.py` | no | Checks the statistical test of `bench_report.py` on synthetic launches |
+| `scripts/test_bench_env.sh`, `scripts/test_install_bench_env.sh` | no | Tests of the two scripts that touch privilege |
 | `scripts/run_perf.sh` | — | Profiling helper from the cloud VM period. It has the defects listed in `AUDIT.md` and is not part of this workflow |
 
 ## Recording a study
@@ -82,7 +83,7 @@ launch can be trusted:
 | `suspended_s` | Difference between `CLOCK_BOOTTIME` and `CLOCK_MONOTONIC` | 0 |
 | `device_irqs` | `/proc/interrupts`, numbered lines, on the measurement cores | 0 |
 | `irq_TRM` | Thermal event interrupts on the measurement cores | 0 |
-| `mhz_min`, `mhz_max` | `scaling_cur_freq` of each busy core, once a second | The base frequency |
+| `mhz_min`, `mhz_max` | `scaling_cur_freq` of the launch's cores, once a second | The base frequency for a core that stays busy. A launch on two cores leaves one idle during its single-threaded benchmarks, and an idle core reports a lower value |
 | `foreign_ms` | CPU time on the launch's cores (`/proc/schedstat`) minus the launch's own CPU time | Close to 0 |
 | `waited_ms` | Time runnable tasks waited for the launch's cores (`/proc/schedstat`) | Close to 0 |
 | `involuntary_switches` | `getrusage` of the launch | Low |
@@ -99,12 +100,31 @@ and the moment this one's were.
 
 `bench_report.py` answers one question per benchmark: do results move between
 launches of unchanged binaries by more than the repetitions inside one launch
-scatter? It reports the spread of the launch medians (largest relative to
-smallest) next to the spread that the scatter inside a launch would produce by
-itself. It then shuffles the repetitions between launches many times and marks
-the benchmark as moving when fewer than one shuffle in a thousand reaches the
-observed spread. The same is done for sessions, for a trend over time, and for
-the difference between the two conditions.
+scatter? Each launch is represented by the median of its repetitions, and the
+report gives four numbers about those launch medians:
+
+| Number | Meaning |
+|---|---|
+| Middle half | The distance between their quartiles, relative to their median: how far a typical launch is from another |
+| Spread | The largest relative to the smallest, minus one: how far the two most distant launches are apart |
+| Expected from scatter | The spread that the scatter inside a launch would produce if launches did not differ |
+| p (launches) | How often shuffling the repetitions between launches makes the launches differ as much as observed |
+
+A benchmark moves between launches when p is below 0.001. The same test is
+applied to the launch medians grouped by session and by condition, and a rank
+correlation with recording order tests for a trend over time.
+
+The test compares the rank sums of the launches (the Kruskal-Wallis statistic)
+and not their spread, because a benchmark that settles on one of two levels at
+each launch keeps the same spread when its repetitions are shuffled.
+`scripts/test_bench_report.py` checks the test on synthetic launches: it stays
+quiet when launches do not differ and finds both a gradual difference and a
+two-level one. A single launch that is slower than the rest shows in the spread
+and in the count of launches beyond scatter more reliably than in p.
+
+Because launches differ, a comparison between two versions of the code needs
+several launches of each, and compares their launch medians. The scatter of the
+repetitions inside one launch says nothing about the next launch.
 
 ## Known limits
 
@@ -115,5 +135,7 @@ the difference between the two conditions.
 - Latency is reported in ticks of the processor's timestamp counter (TSC). The
   counter's frequency has not been calibrated, so ticks are not converted to
   time.
+- The timer tick, softirqs and per-CPU kernel threads stay on the measurement
+  cores. Removing them needs kernel boot parameters.
 - A study covers one boot. Whether results move across reboots or kernel
   updates is not covered by it.
