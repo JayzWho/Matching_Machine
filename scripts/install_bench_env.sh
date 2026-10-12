@@ -32,7 +32,7 @@
 #   <user> ALL=(root) NOPASSWD: /usr/local/sbin/mm-bench-env setup, /usr/local/sbin/mm-bench-env restore
 #
 # Re-run the install after bench_env.sh changes. Until then the installed copy
-# is stale; run_anchor.sh records whether the copy that performed setup matched
+# is stale; capture_env.sh records whether the copy that performed setup matched
 # the committed script.
 # =============================================================================
 
