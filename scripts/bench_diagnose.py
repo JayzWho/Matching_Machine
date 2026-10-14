@@ -144,6 +144,7 @@ class DiagnosticStudy:
             "design": {"sessions": self.opts.sessions, "blocks_per_session": self.opts.blocks,
                        "repetitions": self.opts.repetitions, "interference": self.opts.interference,
                        "allow_unmovable": getattr(self.opts, "allow_unmovable", []),
+                       "launch_timeout_s": getattr(self.opts, "launch_timeout", None),
                        "warmup_min_time_s": self.opts.warmup, "sample_interval_s": 0.1,
                        "order": "rotate left by global block index", "matrix": self.matrix},
             "source_sha256": inputs,
@@ -266,7 +267,8 @@ class DiagnosticStudy:
         try:
             output, marks, record = recorder.launch(
                 condition["binary"], cores, measure, args, json_path,
-                command_prefix=condition["prefix"], env=environment, sample_interval=0.1)
+                command_prefix=condition["prefix"], env=environment, sample_interval=0.1,
+                timeout=getattr(self.opts, "launch_timeout", None))
         except BaseException as exc:
             (self.raw / f"{stem}.log").write_bytes(getattr(exc, "benchmark_output", b""))
             metadata["error"] = f"{type(exc).__name__}: {exc}"
@@ -363,6 +365,9 @@ def main():
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=3, help="minimum seconds of discarded single-core warm-up")
     parser.add_argument("--interference", choices=("cleared", "shared"), default="cleared")
+    parser.add_argument("--launch-timeout", type=float, default=300, metavar="SECONDS",
+                        help="kill a launch still running after this long and stop the study "
+                             "(default 300); the mutex baseline can hang on a lost wake-up")
     parser.add_argument("--allow-unmovable", action="append", default=[], metavar="NAME",
                         help="process name (as in /proc/PID/comm) whose tasks may refuse the cleared "
                              "affinity, such as a service manager holding a capability; recorded per "
@@ -372,6 +377,8 @@ def main():
         parser.error("sessions, blocks and repetitions must all be positive")
     if opts.warmup < 0:
         parser.error("warmup must be nonnegative")
+    if not opts.launch_timeout > 0:
+        parser.error("launch timeout must be positive")
     try:
         matrix = load_matrix(opts.matrix)
     except (ValueError, OSError) as exc:
