@@ -31,6 +31,11 @@ def launch_key(row):
             row["condition"], row["binary"])
 
 
+def natural(text):
+    """Order benchmark names by their numeric arguments: 10000 before 50000."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", str(text))]
+
+
 def cv(values):
     return stats.stdev(values) / stats.mean(values) * 100 if len(values) > 1 else None
 
@@ -65,7 +70,7 @@ def raw_files(directory):
     return files
 
 
-def layout_rows(directory, launches):
+def layout_rows(directory, launches, launch_medians):
     files = raw_files(directory)
     by_key = {launch_key(row): row for row in launches}
     observations = {}
@@ -123,6 +128,18 @@ def layout_rows(directory, launches):
             "multi_mod64_launches": sum(len(v["mod64"]) > 1 for v in launches_values),
             "multi_mod4096_launches": sum(len(v["mod4096"]) > 1 for v in launches_values),
         })
+    # Where the address residue was not fixed by the condition, list every
+    # launch with its residue next to its scores, so the join can be checked.
+    varying = {(row["condition"], row["binary"]) for row in rows if row["unique_mod64"] > 1}
+    listed = sorted((key for key in observations if key[2:] in varying),
+                    key=lambda key: (sorted(observations[key]["mod64"]), key))
+    for key in listed:
+        rows.append({"kind": "launch_layout", "condition": key[2], "binary": key[3],
+                     "session": key[0], "block": key[1],
+                     "mod64": ";".join(map(str, sorted(observations[key]["mod64"]))),
+                     **{f"{benchmark} (ms)": value / 1e6
+                        for benchmark, value in sorted(launch_medians[key].items(),
+                                                      key=lambda item: natural(item[0]))}})
     return rows
 
 
@@ -159,18 +176,20 @@ def summarize(directory):
             raise ValueError(f"invalid real time: {value}")
         group[index] = value
 
-    grouped = defaultdict(list)
+    grouped, launch_medians = defaultdict(list), defaultdict(dict)
     for (key, benchmark), repetition_values in repetitions.items():
         if set(repetition_values) != set(range(expected)):
             raise ValueError(f"incomplete repetitions: {key}, {benchmark}; expected {expected}")
         values = list(repetition_values.values())
         grouped[(*key[2:], benchmark)].append((stats.median(values), cv(values)))
+        launch_medians[key][benchmark] = stats.median(values)
     missing = set(launch_records) - {key for key, _ in repetitions}
     if missing:
         raise ValueError(f"launches without samples: {sorted(missing)}")
 
     rows = []
-    for (condition, binary, benchmark), entries in sorted(grouped.items()):
+    for (condition, binary, benchmark), entries in sorted(grouped.items(),
+                                                          key=lambda item: [natural(part) for part in item[0]]):
         medians = [value for value, _ in entries]
         inside_cv = [value for _, value in entries if value is not None]
         rows.append({
@@ -204,36 +223,47 @@ def summarize(directory):
             "foreign_ms_per_s_max": max(foreign),
             "foreign_above_5_ms_per_s": sum(value > 5 for value in foreign),
         })
-    rows += layout_rows(directory, launches)
+    rows += layout_rows(directory, launches, launch_medians)
     return [{"study": str(directory), **row} for row in rows]
 
 
-def display(value):
+def display(field, value):
     if value is None:
         return "n/a"
+    if field.endswith("_ns"):
+        return f"{value / 1e6:.3f}"
     if isinstance(value, float):
-        return f"{value:.6g}"
+        return f"{value:.2f}"
     return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def heading(field):
+    return field[:-3] + "_ms" if field.endswith("_ns") else field
+
+
+TITLES = {"benchmark": "Benchmark", "telemetry": "Telemetry", "layout": "Layout",
+          "launch_layout": "Layout by launch"}
 
 
 def markdown(rows):
     output = [
-        "Launch scores are medians of repetitions; all times below are ns.",
+        "Launch scores are medians of repetitions; times are in ms.",
         "Spread = (max / min − 1) × 100; CV uses sample standard deviation; "
         "IQR uses inclusive quartiles divided by the median. CV requires at least two observations.",
         "Layout counts use independent launches; repeated lines in a launch are deduplicated.", "",
     ]
     for study in dict.fromkeys(row["study"] for row in rows):
         output += [f"## {study}", ""]
-        for kind in ("benchmark", "telemetry", "layout"):
+        for kind, title in TITLES.items():
             selected = [row for row in rows if row["study"] == study and row["kind"] == kind]
             if not selected:
                 continue
             fields = [field for field in selected[0] if field not in ("study", "kind")]
-            output += [f"### {kind.capitalize()}", "",
-                       "| " + " | ".join(fields) + " |",
+            output += [f"### {title}", "",
+                       "| " + " | ".join(map(heading, fields)) + " |",
                        "| " + " | ".join("---" for _ in fields) + " |"]
-            output += ["| " + " | ".join(display(row[field]) for field in fields) + " |" for row in selected]
+            output += ["| " + " | ".join(display(field, row[field]) for field in fields) + " |"
+                       for row in selected]
             output.append("")
     return "\n".join(output)
 

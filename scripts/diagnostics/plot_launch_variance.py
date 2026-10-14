@@ -4,20 +4,16 @@
 Usage:
   python3 scripts/diagnostics/plot_launch_variance.py ASLR_STUDY LAYOUT_STUDY
 
-Writes launch_variance.svg, launch_variance.png, plotted_launches.csv and
-plot_provenance.json to LAYOUT_STUDY/artifacts by default. Matplotlib is used
-when installed; otherwise the same data are drawn with Cairo. Jitter is derived
+Writes launch_variance.svg to the directory above LAYOUT_STUDY by default.
+Matplotlib is used when installed; otherwise the same data are drawn with Cairo. Jitter is derived
 from each launch identity, never from performance, and is deterministic.
 """
 import argparse
 from collections import defaultdict
-import csv
 import hashlib
-import json
 import math
 from pathlib import Path
 import statistics
-import sys
 
 import summarize
 
@@ -30,10 +26,6 @@ PANELS = (
      ("offset_00", "offset_16", "offset_32", "offset_48"), ("0", "16", "32", "48")),
 )
 COLORS = ("#007F85", "#CA6D32", "#7560A5", "#5E7C3B")
-
-
-def sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def load_launches(directory, panel):
@@ -103,7 +95,6 @@ def plot_matplotlib(rows, output, ymin, ymax, sessions):
                 fontsize=10, color="#515D67")
     figure.subplots_adjust(left=0.09, right=0.975, bottom=0.22, top=0.76, wspace=0.15)
     figure.savefig(output / "launch_variance.svg", metadata={"Date": None})
-    figure.savefig(output / "launch_variance.png", dpi=160)
     plt.close(figure)
     return {"renderer": "matplotlib", "version": matplotlib.__version__}
 
@@ -191,12 +182,6 @@ def plot_cairo(rows, output, ymin, ymax, sessions):
     svg = cairo.SVGSurface(str(output / "launch_variance.svg"), width, height)
     draw(cairo.Context(svg))
     svg.finish()
-    scale = 1.6
-    png = cairo.ImageSurface(cairo.FORMAT_ARGB32, int(width * scale), int(height * scale))
-    context = cairo.Context(png)
-    context.scale(scale, scale)
-    draw(context)
-    png.write_to_png(str(output / "launch_variance.png"))
     return {"renderer": "cairo", "version": cairo.cairo_version_string(),
             "python_binding_version": cairo.version}
 
@@ -218,7 +203,7 @@ def main():
     ymax = math.ceil(max(row["median_ms"] for row in rows) / 5) * 5
     if ymax == ymin:
         ymax += 5
-    output = args.output or args.layout_study / "artifacts"
+    output = args.output or args.layout_study.parent
     output.mkdir(parents=True, exist_ok=True)
     try:
         import matplotlib  # noqa: F401
@@ -226,16 +211,6 @@ def main():
         renderer = plot_cairo(rows, output, ymin, ymax, sessions)
     else:
         renderer = plot_matplotlib(rows, output, ymin, ymax, sessions)
-    with (output / "plotted_launches.csv").open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=rows[0], lineterminator="\n")
-        writer.writeheader()
-        writer.writerows(rows)
-    provenance = {"benchmark": BENCHMARK, "launches": len(rows), "command": sys.argv,
-                  "y_limits_ms": [ymin, ymax], "jitter": "SHA-256 of panel/session/block/condition/binary",
-                  "sources": {str(directory / name): sha256(directory / name)
-                              for directory in directories for name in ("env.json", "samples.csv", "launches.csv")},
-                  **renderer}
-    (output / "plot_provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     print(f"Wrote {len(rows)} independent launch scores to {output} ({renderer['renderer']})")
 
 
