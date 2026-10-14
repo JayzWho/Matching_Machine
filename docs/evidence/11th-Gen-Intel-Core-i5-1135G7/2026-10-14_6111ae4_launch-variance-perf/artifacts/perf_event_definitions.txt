@@ -1,0 +1,13 @@
+
+cache:
+  mem_load_l3_hit_retired.xsnp_fwd
+       [Snoop hit a modified(HITM) or clean line(HIT_W_FWD) in another on-pkg
+        core which forwarded the data back due to a retired load instruction
+        Supports address when precise. Unit: cpu]
+        cpu/event=0xd2,period=20011,umask=4/
+
+
+cache:
+  l2_rqsts.all_rfo
+       [RFO requests to L2 cache. Unit: cpu]
+        cpu/event=0x24,period=200003,umask=0xe2/
