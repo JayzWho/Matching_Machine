@@ -252,15 +252,22 @@ group. Null-pointer dereferences remain covered by ASan. Reproduced against both
 ### Run Benchmarks
 
 ```bash
-# SPSC pipeline (bind to 2 cores to stabilize RDTSC cross-thread measurement)
-taskset -c 0,1 ./build/release/bench_matching_engine
+# Once per machine: install the measurement-mode script. It prints the sudoers
+# rule that lets `setup` and `restore` run without a password.
+sudo scripts/install_bench_env.sh
 
-# Mutex baseline (symmetric binding for fair comparison)
-taskset -c 0,1 ./build/release/bench_baseline_mutex
-
-# OrderBook microbenchmarks (single-thread, bind to core 0)
-taskset -c 0 ./build/release/bench_order_book
+# Record a study, then print its tables. The recorder enters measurement mode
+# (pinned frequency, SMT siblings offline, device interrupts steered away),
+# launches every benchmark binary repeatedly, and leaves measurement mode.
+scripts/bench_record.py --label control
+scripts/bench_report.py docs/evidence/<cpu>/<study>
 ```
+
+A binary can also be started by hand for a quick look, for example
+`./build/release/bench_order_book`, but such a run is not evidence.
+[`docs/BENCHMARKING.md`](docs/BENCHMARKING.md) describes the workflow and what is
+checked for every launch; [`docs/evidence/`](docs/evidence/README.md) holds the
+recorded studies.
 
 ---
 
@@ -284,8 +291,15 @@ Matching_Machine/
 │   └── main.cpp
 ├── benchmarks/
 │   ├── bench_order_book.cpp       # OrderBook microbenchmarks (before/after optimization)
+│   ├── bench_spsc_ring_buffer.cpp # Ring buffer microbenchmarks, with a mutex queue for comparison
 │   ├── bench_matching_engine.cpp  # SPSC pipeline end-to-end benchmark
 │   └── bench_baseline_mutex.cpp   # Mutex baseline (self-contained, does not touch src/)
+├── scripts/
+│   ├── bench_env.sh               # Enter and leave measurement mode
+│   ├── install_bench_env.sh       # Install the root-owned copy that sudo may run
+│   ├── capture_env.sh             # Record the environment of a measurement
+│   ├── bench_record.py            # Record a study: repeated launches with telemetry
+│   └── bench_report.py            # Turn a study into tables
 ├── tests/
 │   ├── test_order_book.cpp
 │   ├── test_spsc_ring_buffer.cpp
@@ -293,7 +307,8 @@ Matching_Machine/
 │   └── test_matching_engine.cpp
 ├── docs/
 │   ├── AUDIT.md                   # Benchmark methodology audit — read before citing §4
-│   ├── evidence/                  # Archived raw benchmark output (historical VM era)
+│   ├── BENCHMARKING.md            # How measurements are made and checked
+│   ├── evidence/                  # Recorded studies and the surviving cloud VM result file
 │   └── snapshots/                 # Pre-optimization snapshots for diff reference
 └── CMakeLists.txt
 ```
