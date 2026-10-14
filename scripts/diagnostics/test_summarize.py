@@ -70,6 +70,20 @@ class SummaryTest(unittest.TestCase):
         raw.rmdir()
         self.assertEqual(layout(), result)
 
+    def test_varying_layout_listed_by_launch(self):
+        raw = self.path / "raw"
+        raw.mkdir()
+        for block, address in ((1, 0x1030), (2, 0x1000)):
+            stem = f"s1_b{block}_c0"
+            (raw / f"{stem}.command.json").write_text(json.dumps({
+                "complete": True, "condition": "named_condition"}))
+            (raw / f"{stem}.log").write_text(
+                f"MM_LAYOUT address={address:#x} mod64={address % 64} mod4096={address % 4096}\n")
+        rows = [row for row in summarize.summarize(self.path) if row["kind"] == "launch_layout"]
+        self.assertEqual([(row["block"], row["mod64"], row["BM_Test (ms)"]) for row in rows],
+                         [(2, "0", 200 / 1e6), (1, "48", 100 / 1e6)])
+        self.assertIn("### Layout by launch", summarize.markdown(summarize.summarize(self.path)))
+
     def test_missing_or_duplicate_repetition_rejected(self):
         removed = self.samples.pop()
         self.write_rows()
