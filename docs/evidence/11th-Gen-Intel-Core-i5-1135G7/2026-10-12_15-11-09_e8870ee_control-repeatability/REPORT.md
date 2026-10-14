@@ -9,10 +9,8 @@ repeatable those programs are on this machine and not how fast the engine is.
 
 ## Question
 
-Three earlier recordings of the same binaries, each with one launch per binary,
-disagreed by up to 36% on some benchmarks. This study asks whether results move
-when nothing in the code changes, and between what: repetitions, launches,
-sessions, or time.
+This study asks whether results move when nothing in the code changes, and
+between what: repetitions, launches, sessions, or time.
 
 ## How it was recorded
 
@@ -23,8 +21,8 @@ offline, device interrupts steered to the cores that are not measured. A round
 launches each of the four binaries once, in an order that rotates. Rounds
 alternate between two conditions. In `shared`, the other processes of the user
 may run on the two measurement cores. In `cleared`, every one of them is
-restricted to the two other cores. A VirtualBox virtual machine that had been
-running during two of the earlier recordings was paused for the whole study.
+restricted to the two other cores. A VirtualBox virtual machine was paused for
+the whole study.
 
 A launch is represented by the median of its repetitions.
 
@@ -103,49 +101,6 @@ but it is rare and it is not what moves results from launch to launch.
 
 The timer tick, softirqs and per-CPU kernel threads stayed on the measurement
 cores in both conditions.
-
-## The earlier single launches
-
-The medians of the three earlier recordings, next to the lowest and the highest
-launch median of this study. Values outside that range are bold. The earlier
-recordings had 10 repetitions per benchmark; their files are kept at the tag
-`archive/control-runs-2026-10`.
-
-| Benchmark | 2026-09-22 | 2026-10-07, first | 2026-10-07, second | This study: lowest launch | Highest launch |
-|---|---:|---:|---:|---:|---:|
-| `BM_AddOrder_NoMatch`, ns | 39.50 | 39.10 | 38.29 | 37.15 | 39.82 |
-| `BM_AddOrder_FullMatch`, ns | 405.4 | 403.5 | 403.4 | 400.8 | 413.9 |
-| `BM_AddOrder_SweepLevels/1`, ns | 449.7 | 452.3 | **448.7** | 448.7 | 457.8 |
-| `BM_AddOrder_SweepLevels/5`, ns | 648.2 | 648.3 | 649.0 | 645.3 | 666.1 |
-| `BM_AddOrder_SweepLevels/10`, ns | 884.3 | 883.8 | 890.7 | 880.0 | 924.4 |
-| `BM_AddOrder_SweepLevels/20`, ns | **1,661** | 1,638 | **1,669** | 1,583 | 1,657 |
-| `BM_CancelOrder`, us | 45.00 | 44.71 | 44.43 | 44.24 | 45.24 |
-| `BM_MixedWorkload/iterations:50`, ms | 134.9 | **133.3** | **133.1** | 133.4 | 136.1 |
-| `BM_SPSC_SingleThread_Push`, ns | **1.407** | 1.102 | 1.108 | 1.098 | 1.205 |
-| `BM_SPSC_SingleThread_PushPop`, ns | 1.565 | **1.561** | 1.564 | 1.561 | 1.576 |
-| `BM_SPSC_ProducerConsumer/10000/real_time`, us | 379.2 | 331.9 | 313.3 | 290.6 | 808.1 |
-| `BM_SPSC_ProducerConsumer/100000/real_time`, us | 4,775 | 3,706 | 3,939 | 3,677 | 9,465 |
-| `BM_Mutex_ProducerConsumer/10000/real_time`, us | 3,509 | 2,970 | 2,961 | 2,506 | 4,108 |
-| `BM_Mutex_ProducerConsumer/100000/real_time`, ms | 33.72 | 29.73 | 28.69 | 23.58 | 42.90 |
-| `BM_SPSC_Order_ProducerConsumer/10000/real_time`, us | 500.6 | 578.9 | 583.1 | 454.0 | 670.9 |
-| `BM_Pipeline_Throughput/10000/iterations:3`, us | 2,530 | **2,296** | 2,379 | 2,307 | 3,186 |
-| `BM_Pipeline_Throughput/50000/iterations:3`, ms | 13.48 | **12.57** | 13.81 | 12.71 | 14.32 |
-| `BM_Pipeline_Throughput/100000/iterations:3`, ms | 29.12 | **26.89** | 29.31 | 27.37 | 38.41 |
-| `BM_SingleThread_Baseline`, us | 1,403 | 1,399 | 1,404 | 1,393 | 1,425 |
-| `BM_MutexPipeline_Throughput/10000/iterations:3`, us | 5,018 | 4,689 | 6,399 | 4,559 | 6,916 |
-| `BM_MutexPipeline_Throughput/50000/iterations:3`, ms | 24.91 | 24.06 | 32.25 | 23.66 | 36.11 |
-| `BM_MutexPipeline_Throughput/100000/iterations:3`, ms | 49.40 | 48.68 | 63.62 | 47.12 | 68.46 |
-
-Of the 66 earlier medians, 56 lie inside the range of this study and 9 lie
-outside it by less than 2%. One lies 16.8% above it: `BM_SPSC_SingleThread_Push`
-on 2026-09-22, which was recorded in an earlier boot under kernel 7.0.0-31.
-This study cannot tell whether that value was a rare slow launch or a
-difference between boots.
-
-The differences that had been read as drift between those recordings are the
-launch-to-launch movement of findings 2 to 4. The mutex pipeline at 100,000
-orders, 31% slower in the second recording of 2026-10-07 than in the first,
-was once at its upper level (63.62 ms) and once at its lower (48.68 ms).
 
 ## Consequences for later measurements
 
