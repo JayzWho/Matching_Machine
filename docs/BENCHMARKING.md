@@ -164,6 +164,15 @@ follow the wrapper. Use the completed target JSON for scores and the profiler's
 own counters; do not infer target CPU time or foreign CPU activity from wrapper
 accounting. The GDB address observations explicitly detach before timing.
 
+In the `cleared` condition the runner stops when a task of the user refuses the
+new CPU mask. The kernel refuses it for a process that holds a capability the
+recorder lacks: on this machine `systemd --user` (`CAP_WAKE_ALARM`) and a
+running VirtualBox VM. `--allow-unmovable NAME` accepts the tasks of one named
+process; they are counted in `launches.csv` and named in `env.json`, and the
+foreign CPU time of every launch shows whether they ran on the measurement
+cores. Save a VM's state before a study rather than pausing it, so that its
+process exits.
+
 The runner preserves partial output on failure and restores measurement mode
 and saved affinities before reporting an error. Its failure-path tests are in
 `scripts/test_bench_diagnose.py`; the diagnostic summary and thread-placement

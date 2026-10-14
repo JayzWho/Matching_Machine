@@ -12,6 +12,7 @@ Command prefixes must keep descendants in the launch session. Creating a new
 process group, as GDB does for an inferior, is supported during cancellation.
 """
 import argparse
+from collections import Counter
 import csv
 import hashlib
 import json
@@ -76,6 +77,13 @@ def load_matrix(path):
     return matrix
 
 
+def task_name(pid):
+    try:
+        return Path(f"/proc/{pid}/comm").read_text().strip()
+    except OSError:
+        return "?"
+
+
 def privileged(action, destination):
     """Finish setup/restore before handling a signal, so they cannot overlap."""
     pending, previous = [], {}
@@ -135,6 +143,7 @@ class DiagnosticStudy:
             "git_status": recorder.run("git", "status", "--porcelain").stdout,
             "design": {"sessions": self.opts.sessions, "blocks_per_session": self.opts.blocks,
                        "repetitions": self.opts.repetitions, "interference": self.opts.interference,
+                       "allow_unmovable": getattr(self.opts, "allow_unmovable", []),
                        "warmup_min_time_s": self.opts.warmup, "sample_interval_s": 0.1,
                        "order": "rotate left by global block index", "matrix": self.matrix},
             "source_sha256": inputs,
@@ -207,10 +216,7 @@ class DiagnosticStudy:
                 offset = ((number - 1) * self.opts.blocks + block - 1) % len(self.matrix)
                 order = self.matrix[offset:] + self.matrix[:offset]
                 for position, condition in enumerate(order, 1):
-                    moved = recorder.apply_affinity(self.baseline, measure) if self.opts.interference == "cleared" \
-                        else (0, 0, 0)
-                    if moved[2]:
-                        raise RuntimeError(f"could not clear {moved[2]} user tasks from measurement cores")
+                    moved = self.clear(measure, info) if self.opts.interference == "cleared" else (0, 0, 0)
                     self.one(number, block, position, condition, cores, measure, moved)
                 recorder.log(f"session {number} block {block}/{self.opts.blocks} complete")
         finally:
@@ -219,6 +225,21 @@ class DiagnosticStudy:
                     info["after"] = self.capture_env(f"s{number}_env_after.json")
             finally:
                 self.leave()
+
+    def clear(self, measure, info):
+        """Restrict this user's tasks to the housekeeping cores. Only tasks of
+        processes named with --allow-unmovable may refuse; they are recorded."""
+        refused = []
+        moved = recorder.apply_affinity(self.baseline, measure, refused)
+        names = Counter(task_name(pid) for pid, _ in refused)
+        unexpected = sorted(set(names) - set(getattr(self.opts, "allow_unmovable", [])))
+        if unexpected:
+            raise RuntimeError(f"could not clear {moved[2]} user tasks from measurement cores: "
+                               + ", ".join(unexpected))
+        recorded = info.setdefault("unmovable_tasks", {})
+        for name, count in names.items():
+            recorded[name] = max(recorded.get(name, 0), count)
+        return moved
 
     def one(self, session, block, position, condition, cores, measure, moved):
         # The absolute output argument has constant length throughout a study.
@@ -255,7 +276,8 @@ class DiagnosticStudy:
         metadata.update({"complete": True, "telemetry": record})
         write_json(meta_path, metadata)
         self.rows["launches"].append({**key, "position": position, "cores": " ".join(map(str, cores)),
-                                      "user_tasks_seen": moved[0], "user_tasks_moved": moved[1], **record})
+                                      "user_tasks_seen": moved[0], "user_tasks_moved": moved[1],
+                                      "user_tasks_unmovable": moved[2], **record})
         self.checkpoint()
         if record["exit_status"]:
             raise RuntimeError(f"{stem} exited {record['exit_status']}; see its raw log")
@@ -341,6 +363,10 @@ def main():
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=3, help="minimum seconds of discarded single-core warm-up")
     parser.add_argument("--interference", choices=("cleared", "shared"), default="cleared")
+    parser.add_argument("--allow-unmovable", action="append", default=[], metavar="NAME",
+                        help="process name (as in /proc/PID/comm) whose tasks may refuse the cleared "
+                             "affinity, such as a service manager holding a capability; recorded per "
+                             "session, and any other refusal stops the study")
     opts = parser.parse_args()
     if min(opts.sessions, opts.blocks, opts.repetitions) < 1:
         parser.error("sessions, blocks and repetitions must all be positive")

@@ -38,6 +38,24 @@ class DiagnosticTests(unittest.TestCase):
             self.assertEqual(condition["binary"], str(recorder.ROOT / "build/diagnostic/bench_mutex"))
             self.assertEqual(condition["prefix"], [])
 
+    def test_cleared_condition_accepts_only_named_unmovable_tasks(self):
+        opts = argparse.Namespace(output=Path("/nonexistent"), allow_unmovable=["systemd"])
+        study = diagnose.DiagnosticStudy(opts, [])
+
+        def refuse(_baseline, _exclude, failures):
+            failures.append((10, 10))
+            return (5, 4, 1)
+
+        info = {}
+        with patch.object(recorder, "apply_affinity", side_effect=refuse), \
+             patch.object(diagnose, "task_name", return_value="systemd"):
+            self.assertEqual(study.clear({1, 3}, info), (5, 4, 1))
+        self.assertEqual(info["unmovable_tasks"], {"systemd": 1})
+        with patch.object(recorder, "apply_affinity", side_effect=refuse), \
+             patch.object(diagnose, "task_name", return_value="VBoxHeadless"):
+            with self.assertRaisesRegex(RuntimeError, "VBoxHeadless"):
+                study.clear({1, 3}, {})
+
     def test_setup_failure_still_restores_environment_and_affinity(self):
         with tempfile.TemporaryDirectory() as directory:
             opts = argparse.Namespace(output=Path(directory), sessions=1, blocks=1,
