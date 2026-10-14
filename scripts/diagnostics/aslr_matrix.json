@@ -1,0 +1,17 @@
+[
+  {
+    "name": "native_aslr",
+    "binary": "bench_baseline_mutex",
+    "filter": "^BM_MutexPipeline_Throughput/"
+  },
+  {
+    "name": "native_noaslr",
+    "binary": "bench_baseline_mutex",
+    "filter": "^BM_MutexPipeline_Throughput/",
+    "prefix": [
+      "setarch",
+      "x86_64",
+      "-R"
+    ]
+  }
+]

@@ -256,21 +256,55 @@ def apply_affinity(baseline, exclude=frozenset()):
 
 # ── one launch ───────────────────────────────────────────────────────────────
 
-def launch(binary, cores, measure, args, json_path):
-    """Run one binary on `cores`; return its console output, telemetry marks and a record."""
-    cmd = ["taskset", "-c", ",".join(map(str, sorted(cores))), str(BUILD / binary),
+def kill_launch_session(session):
+    """Stop descendants that changed process group but kept the launch session."""
+    if session <= 1 or session == os.getsid(0):
+        raise ValueError("refusing to terminate the recorder's session")
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        try:
+            if os.getsid(pid) != session:
+                continue
+            # Pin the process identity before checking membership again, so
+            # PID reuse cannot redirect the signal to an unrelated process.
+            descriptor = os.pidfd_open(pid)
+            try:
+                if os.getsid(pid) == session:
+                    signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+            finally:
+                os.close(descriptor)
+        except ProcessLookupError:
+            pass
+    # Also cover the original group if a task appeared during the scan.
+    try:
+        os.killpg(session, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def launch(binary, cores, measure, args, json_path, *, command_prefix=(), env=None, sample_interval=1.0):
+    """Run one binary on `cores`; return output, telemetry marks and a record.
+
+    Prefixes may create process groups, but must not start a new session.
+    """
+    if not sample_interval > 0:
+        raise ValueError("sample_interval must be positive")
+    cmd = ["taskset", "-c", ",".join(map(str, sorted(cores))), *command_prefix, str(BUILD / binary),
            "--benchmark_out_format=json", f"--benchmark_out={json_path}", *args]
     before = snapshot(measure)
     started = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     t0 = time.monotonic_ns()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            env=env, start_new_session=True)
     clock = ((~proc.pid) << 3) | 2          # the child's process CPU-time clock
     fd, out, marks, mhz, cpu_ns = proc.stdout.fileno(), bytearray(), [], [], 0
     try:
         while True:
-            ready, _, _ = select.select([fd], [], [], 1.0)
+            ready, _, _ = select.select([fd], [], [], sample_interval)
             if not ready:
-                mhz += core_mhz(cores)      # once a second while the launch is silent, i.e. measuring
+                mhz += core_mhz(cores)      # sample while the launch is silent, i.e. measuring
                 continue
             chunk = os.read(fd, 1 << 16)
             if not chunk:
@@ -283,8 +317,23 @@ def launch(binary, cores, measure, args, json_path):
             sched = read_schedstat()
             marks.append((len(out), time.monotonic_ns(), cpu_ns, sum(sched[c][1] for c in cores)))
         _, status, usage = os.wait4(proc.pid, 0)
-    except BaseException:
-        proc.kill()
+    except BaseException as exc:
+        # GDB can put its inferior in a different process group. The session
+        # still identifies all processes belonging to this launch.
+        kill_launch_session(proc.pid)
+        proc.wait()
+        # Preserve available output without waiting for EOF from an unsupported
+        # prefix that escaped the session and retained the pipe.
+        os.set_blocking(fd, False)
+        while True:
+            try:
+                chunk = os.read(fd, 1 << 16)
+            except BlockingIOError:
+                break
+            if not chunk:
+                break
+            out += chunk
+        exc.benchmark_output = bytes(out)
         raise
     finally:
         proc.stdout.close()

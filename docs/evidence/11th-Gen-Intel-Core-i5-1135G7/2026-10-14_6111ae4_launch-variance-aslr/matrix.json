@@ -1,0 +1,22 @@
+[
+  {
+    "name": "native_aslr",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/release/bench_baseline_mutex",
+    "filter": "^BM_MutexPipeline_Throughput/",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "native_noaslr",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/release/bench_baseline_mutex",
+    "filter": "^BM_MutexPipeline_Throughput/",
+    "prefix": [
+      "setarch",
+      "x86_64",
+      "-R"
+    ],
+    "args": [],
+    "env": {}
+  }
+]

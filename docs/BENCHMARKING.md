@@ -40,6 +40,7 @@ can be compared with the unfixed code on the same machine.
 | `scripts/capture_env.sh` | no | Writes a JSON record of the commit, toolchain, build flags, CPU, frequency policy, thermal state and measurement cores |
 | `scripts/bench_record.py` | no | Records a study. Enters and leaves measurement mode itself through the sudoers rule |
 | `scripts/bench_report.py` | no | Turns a study directory into Markdown tables |
+| `scripts/bench_diagnose.py` | no | Records a rotating matrix of focused diagnostic conditions, entering and restoring measurement mode itself |
 | `scripts/test_bench_report.py` | no | Checks the statistical test of `bench_report.py` on synthetic launches |
 | `scripts/test_bench_env.sh`, `scripts/test_install_bench_env.sh` | no | Tests of the two scripts that touch privilege |
 | `scripts/run_perf.sh` | — | Profiling helper from the cloud VM period. It has the defects listed in `AUDIT.md` and is not part of this workflow |
@@ -139,3 +140,31 @@ repetitions inside one launch says nothing about the next launch.
   cores. Removing them needs kernel boot parameters.
 - A study covers one boot. Whether results move across reboots or kernel
   updates is not covered by it.
+
+## Focused launch-variance experiments
+
+[The launch-variance investigation](LAUNCH_VARIANCE.md) records a controlled
+factor for the mutex pipeline's two levels: the engine object's address modulo
+64. It includes unchanged-executable ASLR comparisons, a separate placement
+diagnostic, both worker CPU directions and hardware counters. It does not
+establish a general explanation for the queue benchmarks' remaining variance.
+
+`python3 scripts/bench_diagnose.py --help` describes the condition-matrix runner.
+A diagnostic **block** executes each condition once and rotates order between
+blocks. This does not replace the four-program definition of a round. Matrices
+select an executable, benchmark filter, optional command prefix and environment
+overrides. They keep output argument lengths fixed within a study. Sources and
+executables must be built before recording.
+
+The diagnostic runner samples frequency after 0.1 seconds without output;
+the original recorder retains its one-second default. A recorded frequency
+policy is distinct from observed frequency samples. Prefixes that spawn a
+child, such as perf and GDB, require care: the recorder's process CPU clock may
+follow the wrapper. Use the completed target JSON for scores and the profiler's
+own counters; do not infer target CPU time or foreign CPU activity from wrapper
+accounting. The GDB address observations explicitly detach before timing.
+
+The runner preserves partial output on failure and restores measurement mode
+and saved affinities before reporting an error. Its failure-path tests are in
+`scripts/test_bench_diagnose.py`; the diagnostic summary and thread-placement
+checks are under `scripts/diagnostics/`.
