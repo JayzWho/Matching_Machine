@@ -143,11 +143,11 @@ repetitions inside one launch says nothing about the next launch.
 
 ## Focused launch-variance experiments
 
-[The launch-variance investigation](LAUNCH_VARIANCE.md) records a controlled
-factor for the mutex pipeline's two levels: the engine object's address modulo
-64. It includes unchanged-executable ASLR comparisons, a separate placement
-diagnostic, both worker CPU directions and hardware counters. It does not
-establish a general explanation for the queue benchmarks' remaining variance.
+[The launch-variance investigation](evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-14_13-32-00_65a2223_launch-variance/REPORT.md)
+finds what selects the mutex pipeline's two levels: the engine object's address
+modulo 64. It compares the unchanged binary with and without ASLR, fixes the
+offset in a separate placement binary, varies worker placement and records
+hardware counters. It does not explain the variance of the queue benchmarks.
 
 `python3 scripts/bench_diagnose.py --help` describes the condition-matrix runner.
 A diagnostic **block** executes each condition once and rotates order between
