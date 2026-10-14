@@ -225,10 +225,11 @@ def affinity_baseline():
     return base
 
 
-def apply_affinity(baseline, exclude=frozenset()):
+def apply_affinity(baseline, exclude=frozenset(), failures=None):
     """Give every task of this user its baseline affinity minus `exclude`.
     A task born since the baseline takes its thread-group leader's, else every
-    CPU. Returns (tasks seen, tasks changed, tasks that could not be changed)."""
+    CPU. Returns (tasks seen, tasks changed, tasks that could not be changed);
+    `failures`, when given, collects the (pid, tid) of the last kind."""
     online, me = online_cpus(), os.getpid()
     everything = set(range(os.cpu_count() or 1))
     seen = changed = failed = 0
@@ -251,6 +252,8 @@ def apply_affinity(baseline, exclude=frozenset()):
             seen -= 1
         except OSError:
             failed += 1
+            if failures is not None:
+                failures.append((pid, tid))
     return seen, changed, failed
 
 
