@@ -287,13 +287,17 @@ def kill_launch_session(session):
         pass
 
 
-def launch(binary, cores, measure, args, json_path, *, command_prefix=(), env=None, sample_interval=1.0):
+def launch(binary, cores, measure, args, json_path, *, command_prefix=(), env=None, sample_interval=1.0,
+           timeout=None):
     """Run one binary on `cores`; return output, telemetry marks and a record.
 
     Prefixes may create process groups, but must not start a new session.
+    A launch still running after `timeout` seconds is killed with TimeoutError.
     """
     if not sample_interval > 0:
         raise ValueError("sample_interval must be positive")
+    if timeout is not None and not timeout > 0:
+        raise ValueError("timeout must be positive")
     cmd = ["taskset", "-c", ",".join(map(str, sorted(cores))), *command_prefix, str(BUILD / binary),
            "--benchmark_out_format=json", f"--benchmark_out={json_path}", *args]
     before = snapshot(measure)
@@ -306,6 +310,8 @@ def launch(binary, cores, measure, args, json_path, *, command_prefix=(), env=No
     try:
         while True:
             ready, _, _ = select.select([fd], [], [], sample_interval)
+            if timeout is not None and time.monotonic_ns() - t0 > timeout * 1e9:
+                raise TimeoutError(f"launch still running after {timeout} s")
             if not ready:
                 mhz += core_mhz(cores)      # sample while the launch is silent, i.e. measuring
                 continue

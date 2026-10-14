@@ -114,6 +114,23 @@ class DiagnosticTests(unittest.TestCase):
                                     sample_interval=interval)
                 popen.assert_not_called()
 
+    def test_launch_past_timeout_is_killed(self):
+        process = Mock(pid=12345)
+        process.stdout = Mock()
+        process.stdout.fileno.return_value = 12
+        clock = iter([0, 301 * 10**9])
+        with patch.object(recorder, "snapshot", return_value={}), \
+             patch.object(recorder.subprocess, "Popen", return_value=process), \
+             patch.object(recorder.select, "select", return_value=([], [], [])), \
+             patch.object(recorder.time, "monotonic_ns", side_effect=lambda: next(clock)), \
+             patch.object(recorder, "kill_launch_session") as kill, \
+             patch.object(recorder.os, "set_blocking"), \
+             patch.object(recorder.os, "read", side_effect=[b""]):
+            with self.assertRaisesRegex(TimeoutError, "after 300 s"):
+                recorder.launch("dummy", [1], {1}, [], Path("/tmp/unused.json"), timeout=300)
+            kill.assert_called_once_with(12345)
+            process.wait.assert_called_once()
+
     def test_launch_interrupt_kills_group_reaps_and_preserves_output(self):
         process = Mock(pid=12345)
         process.stdout = Mock()
