@@ -1,0 +1,34 @@
+[
+  {
+    "name": "offset_00",
+    "binary": "build/mutex-layout/bench_mutex_layout",
+    "filter": "^BM_MutexPipeline_Throughput/",
+    "env": {
+      "MM_MUTEX_OFFSET": "0"
+    }
+  },
+  {
+    "name": "offset_16",
+    "binary": "build/mutex-layout/bench_mutex_layout",
+    "filter": "^BM_MutexPipeline_Throughput/",
+    "env": {
+      "MM_MUTEX_OFFSET": "16"
+    }
+  },
+  {
+    "name": "offset_32",
+    "binary": "build/mutex-layout/bench_mutex_layout",
+    "filter": "^BM_MutexPipeline_Throughput/",
+    "env": {
+      "MM_MUTEX_OFFSET": "32"
+    }
+  },
+  {
+    "name": "offset_48",
+    "binary": "build/mutex-layout/bench_mutex_layout",
+    "filter": "^BM_MutexPipeline_Throughput/",
+    "env": {
+      "MM_MUTEX_OFFSET": "48"
+    }
+  }
+]
