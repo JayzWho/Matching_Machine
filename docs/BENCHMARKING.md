@@ -64,11 +64,12 @@ default, which takes about 80 minutes on the reference machine. Rounds
 alternate between the two conditions, and the condition that goes first
 alternates between sessions.
 
-Pause virtual machines and close heavy applications before recording. In the
-`cleared` condition the recorder moves the invoking user's tasks off the
-measurement cores and returns each to its previous affinity afterwards; it
-cannot move tasks of other users or kernel threads, so it measures them
-instead (see `foreign_ms` below).
+Save the state of virtual machines and close heavy applications before
+recording. In the `cleared` condition the recorder moves the invoking user's
+tasks off the measurement cores and returns each to its previous affinity
+afterwards. It cannot move tasks of other users, kernel threads, or a task of
+the user that holds a capability the recorder lacks, such as `systemd --user`,
+so it measures them instead (see `foreign_ms` below).
 
 `scripts/bench_record.py --smoke` is a one-minute wiring check whose output is
 discarded. Add `--unpinned` to run it outside measurement mode.
@@ -149,8 +150,8 @@ modulo 64. It compares the unchanged binary with and without ASLR, fixes the
 offset in a separate placement binary, varies worker placement and records
 hardware counters. It does not explain the variance of the queue benchmarks.
 
-Since then `bench_baseline_mutex` declares its engine `alignas(64)`, which puts
-it at offset 0 in every launch: the slower of the two levels in this build. The
+`bench_baseline_mutex` now declares its engine `alignas(64)`, which puts it at
+offset 0 in every launch: the slower of the two levels in this build. The
 placement binary still varies the offset for diagnostics.
 
 `python3 scripts/bench_diagnose.py --help` describes the condition-matrix runner.
