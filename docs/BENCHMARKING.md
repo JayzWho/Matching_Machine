@@ -179,10 +179,8 @@ killed and the study stops. The mutex baseline hung this way once on
 launch-variance studies: its producer set the completion flag without holding
 the queue mutex, so a consumer that had just found the queue empty could miss
 the notification and wait forever. The producer now sets the flag under the
-mutex. `scripts/diagnostics/mutex_shutdown_stress.cpp` runs the pipeline back
-to back and reports a run that stalls; built with
-`build_mutex_shutdown_stress.sh` against the unfixed source, it usually hangs
-within a minute at 10 or 1,000 orders.
+mutex. A stress program that reproduces the hang, and the throughput before
+and after the fix, are kept under the tag `archive/mutex-lost-wakeup`.
 
 The runner preserves partial output on failure and restores measurement mode
 and saved affinities before reporting an error. Its failure-path tests are in
