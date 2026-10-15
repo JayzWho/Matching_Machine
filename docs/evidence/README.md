@@ -8,8 +8,9 @@ are produced is described in [`../BENCHMARKING.md`](../BENCHMARKING.md).
 | Directory | Contents | Status |
 |---|---|---|
 | [`historical_vm/`](historical_vm/) | The one raw result file that survives from the decommissioned cloud VM | Historical. Cannot be reproduced |
-| [`11th-Gen-Intel-Core-i5-1135G7/2026-10-12_15-11-09_e8870ee_control-repeatability/`](11th-Gen-Intel-Core-i5-1135G7/2026-10-12_15-11-09_e8870ee_control-repeatability/) | The unfixed benchmarks on the current bare-metal machine: 32 launches of each binary in 4 sessions | Current control |
+| [`11th-Gen-Intel-Core-i5-1135G7/2026-10-12_15-11-09_e8870ee_control-repeatability/`](11th-Gen-Intel-Core-i5-1135G7/2026-10-12_15-11-09_e8870ee_control-repeatability/) | The unfixed benchmarks on the current bare-metal machine: 32 launches of each binary in 4 sessions | Previous control. The mutex pipeline starts at either of two levels |
 | [`11th-Gen-Intel-Core-i5-1135G7/2026-10-14_13-32-00_65a2223_launch-variance/`](11th-Gen-Intel-Core-i5-1135G7/2026-10-14_13-32-00_65a2223_launch-variance/) | Six diagnostic recordings of the two-threaded benchmarks: address randomisation, fixed object placement, worker placement, native addresses, hardware counters, and the queue benchmarks | The mutex pipeline's two levels are set by the engine object's position within a cache line. The queue benchmarks remain unexplained |
+| [`11th-Gen-Intel-Core-i5-1135G7/2026-10-15_16-04-12_40a57bc_control/`](11th-Gen-Intel-Core-i5-1135G7/2026-10-15_16-04-12_40a57bc_control/) | The same design with the mutex baseline's hang fixed and its engine object aligned to a cache line; the other three binaries unchanged | Current control. The mutex pipeline runs at one level |
 
 Measurements from the cloud VM and from the bare-metal machine are never
 compared as if a code change separated them.
@@ -21,7 +22,7 @@ per study, named `<date>_[<time>_]<commit>_<label>`:
 
 | File | Contents |
 |---|---|
-| `REPORT.md` | Findings, followed by the tables printed by `scripts/bench_report.py` |
+| `REPORT.md` | Findings. Studies before 2026-10-15 append the tables printed by `scripts/bench_report.py`; later ones give the command that prints them |
 | `samples.csv` | One row per repetition |
 | `launches.csv` | One row per launch: validity checks and interference telemetry |
 | `intervals.csv` | One row per benchmark per launch: wall time, CPU time, run-queue wait |
