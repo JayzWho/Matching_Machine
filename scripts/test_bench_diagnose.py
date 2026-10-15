@@ -201,7 +201,8 @@ class DiagnosticTests(unittest.TestCase):
                 while time.monotonic() < deadline:
                     try:
                         state = Path(f"/proc/{child}/stat").read_text().rsplit(")", 1)[1].split()[0]
-                    except FileNotFoundError:
+                    except (FileNotFoundError, ProcessLookupError):
+                        # Reaped before or while its stat file was read.
                         break
                     if state == "Z":
                         break
