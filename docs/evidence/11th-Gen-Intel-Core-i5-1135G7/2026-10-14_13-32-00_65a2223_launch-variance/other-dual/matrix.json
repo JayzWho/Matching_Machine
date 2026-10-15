@@ -1,0 +1,42 @@
+[
+  {
+    "name": "queues_aslr",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/release/bench_spsc_ring_buffer",
+    "filter": "^BM_(SPSC_ProducerConsumer|Mutex_ProducerConsumer)/100000($|/)",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "queues_noaslr",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/release/bench_spsc_ring_buffer",
+    "filter": "^BM_(SPSC_ProducerConsumer|Mutex_ProducerConsumer)/100000($|/)",
+    "prefix": [
+      "setarch",
+      "x86_64",
+      "-R"
+    ],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "spsc_pipeline_aslr",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/release/bench_matching_engine",
+    "filter": "^BM_Pipeline_Throughput/",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "spsc_pipeline_noaslr",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/release/bench_matching_engine",
+    "filter": "^BM_Pipeline_Throughput/",
+    "prefix": [
+      "setarch",
+      "x86_64",
+      "-R"
+    ],
+    "args": [],
+    "env": {}
+  }
+]
