@@ -174,11 +174,12 @@ cores. Save a VM's state before a study rather than pausing it, so that its
 process exits.
 
 A launch still running after `--launch-timeout` seconds (300 by default) is
-killed and the study stops. The mutex baseline can hang: its producer sets the
-completion flag and notifies the consumer without holding the queue mutex, so a
-consumer that has just found the queue empty can miss the notification and wait
-forever. It happened once on 2026-10-14, after about 3,000 pipeline iterations
-of the re-recorded launch-variance studies.
+killed and the study stops. The mutex baseline hung this way once on
+2026-10-14, after about 3,000 pipeline iterations of the re-recorded
+launch-variance studies: its producer set the completion flag without holding
+the queue mutex, so a consumer that had just found the queue empty could miss
+the notification and wait forever. The producer now sets the flag under the
+mutex.
 
 The runner preserves partial output on failure and restores measurement mode
 and saved affinities before reporting an error. Its failure-path tests are in
