@@ -149,6 +149,10 @@ modulo 64. It compares the unchanged binary with and without ASLR, fixes the
 offset in a separate placement binary, varies worker placement and records
 hardware counters. It does not explain the variance of the queue benchmarks.
 
+Since then `bench_baseline_mutex` declares its engine `alignas(64)`, which puts
+it at offset 0 in every launch: the slower of the two levels in this build. The
+placement binary still varies the offset for diagnostics.
+
 `python3 scripts/bench_diagnose.py --help` describes the condition-matrix runner.
 A diagnostic **block** executes each condition once and rotates order between
 blocks. This does not replace the four-program definition of a round. Matrices
