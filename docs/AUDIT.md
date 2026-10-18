@@ -17,8 +17,11 @@ already public, so silently replacing them would be worse than annotating them. 
 the reasoning that identifies a bad benchmark is the same reasoning the project is
 meant to demonstrate in the first place.
 
-Nothing in the historical record is deleted. Raw evidence recovered from git history
-is archived under `docs/evidence/historical_vm/`.
+Nothing in the historical record is lost. Raw evidence recovered from git history
+is archived under `docs/evidence/historical_vm/`. File and line references below
+are to the audited revision. Files cited here that have since left the tree
+(`learning_notes/`, `docs/optimization_log.md`, `scripts/run_perf.sh`) are kept at
+the tag `archive/pre-cleanup-2026-10`.
 
 ---
 
@@ -55,8 +58,8 @@ difference between them may be described as a code-level speedup.
 | §4.3 P50/P95/P99/P999 latency table | **Values real, interpretation wrong** — measures queueing delay, not service latency (C1) |
 | §4.3 "bare-metal SPSC P50 typically reaches 200–800 ns" | **Withdrawn** — not achievable under the current design (C1) |
 | §4.4 noalloc +30% (6.19 → 8.04 M ops/s) | **Withdrawn** — compares two different workloads (C5) |
-| §5 "33 GTest cases … FeedSimulator" | **Incorrect** — 44 cases; no FeedSimulator test target exists |
-| §5 "abseil-cpp pulled automatically" | **Incorrect** — `find_package(absl REQUIRED)` |
+| §5 "33 GTest cases … FeedSimulator" | **Incorrect** — 44 cases; no FeedSimulator test target exists. Corrected in phase 1 |
+| §5 "abseil-cpp pulled automatically" | **Incorrect** — `find_package(absl REQUIRED)`. Corrected in phase 1 |
 | §3 "cross-thread latency safe under SPSC acquire/release" | **Conceptually wrong** — acquire/release governs visibility, not TSC comparability across cores |
 
 ---
@@ -211,9 +214,9 @@ file also carries an explicit `iterations:N` suffix that the current sources no 
 set. The file is retained as a record of what was actually run, not as a supporting
 measurement.
 
-Separately, the repository does not currently build: `CMakeLists.txt` requires
-`find_package(absl REQUIRED)`, and the audit machine has only the Abseil runtime
-package, not the development package.
+Separately, the audited revision did not build: `CMakeLists.txt` required
+`find_package(absl REQUIRED)`, and the audit machine had only the Abseil runtime
+package, not the development package. Phase 1 fixed this.
 
 ---
 
@@ -274,25 +277,27 @@ The audit found the following correct; they are not scheduled for rework:
 
 ## 7. Remediation plan
 
-| Phase | Scope |
-|---|---|
-| 0 | Freeze the VM-era snapshot (`v1.0-vm-era`), publish this audit, archive recovered evidence |
-| 1 | Make the repository build; capture full environment metadata on every run |
-| 2 | **Anchor measurement**: run the unmodified, still-defective code on the new machine and archive it as the only legitimate control group for subsequent fixes |
-| 3 | Measurement infrastructure: TSC calibration, serialised RDTSC, pre-faulted latency recorder, in-process affinity |
-| 4 | Benchmark semantic fixes, one per pull request, each re-run against the phase-2 anchor |
-| 5 | Implementation correctness: memory pool reclamation |
-| 6 | Pipeline v2: separated service/queue/end-to-end latency, open-loop load generator, queue-depth sweep |
-| 7 | Hardware PMU evidence, now available on bare metal |
-| 8 | Rewrite README §4 with historical and current results side by side, never overwriting |
+| Phase | Scope | Status |
+|---|---|---|
+| 0 | Freeze the VM-era snapshot (`v1.0-vm-era`), publish this audit, archive recovered evidence | Done |
+| 1 | Make the repository build; capture full environment metadata on every run | Done |
+| 2 | **Anchor measurement**: run the unmodified, still-defective code on the new machine and archive it as the only legitimate control group for subsequent fixes | Done; see below |
+| 3 | Measurement infrastructure: TSC calibration, serialised RDTSC, pre-faulted latency recorder, in-process affinity | Not started |
+| 4 | Benchmark semantic fixes, one per pull request, each re-run against the phase-2 anchor | Not started |
+| 5 | Implementation correctness: memory pool reclamation | Not started |
+| 6 | Pipeline v2: separated service/queue/end-to-end latency, open-loop load generator, queue-depth sweep | Not started |
+| 7 | Hardware PMU evidence, now available on bare metal | Not started |
+| 8 | Rewrite README §4 with historical and current results side by side, never overwriting | Not started |
 
 Phase 2 is load-bearing. Because the original environment is gone, the only way to
 attribute a change to code rather than to hardware is to measure the unfixed code on
 the new machine first.
 
-Status of phase 2 on 2026-10-12: the control group is the repeated-launch study
-indexed in [`evidence/README.md`](evidence/README.md). It replaces three
-single-launch recordings, which are kept at the tag `archive/control-runs-2026-10`.
-The study shows that the two-threaded benchmarks move by tens of percent from one
-launch to the next, so a phase-4 fix has to be compared over many launches of each
-version, not against one anchor run.
+One anchor run turned out not to be enough. A repeated-launch study showed that the
+two-threaded benchmarks move by tens of percent from one launch to the next, so a
+phase-4 fix has to be compared over many launches of each version. Two corrections
+to the mutex baseline preceded phase 3: its producer could hang the pipeline by
+setting the completion flag without holding the queue mutex, and its engine object
+is now aligned to a cache line, because the object's address modulo 64 chose between
+two performance levels at every launch. The current control and the conclusions of
+these studies are in [`evidence/README.md`](evidence/README.md).
