@@ -47,14 +47,9 @@ benchmark semantics changed between this run and the published table.
 
 ## Missing evidence
 
-The files cited by `learning_notes/10_optimization.md` as the source of every figure in
-`README.md` §4.1 were never committed and are not recoverable:
-
-```
-results/order_book_2026-04-14_23-35-17_baseline.json
-results/order_book_2026-04-14_23-00-20_opt-v3.json
-```
-
-The pipeline and mutex-baseline figures in §4.2 and §4.3 cite
-`results/matching_engine_2026-04-20_22-25-47_pipeline.json`, also not recoverable. The
-reported values survive only as transcriptions inside `learning_notes/11_pipeline.md`.
+The raw files behind `README.md` §4 were never committed and cannot be
+recovered: `results/order_book_2026-04-14_23-35-17_baseline.json` and
+`results/order_book_2026-04-14_23-00-20_opt-v3.json` for §4.1, and
+`results/matching_engine_2026-04-20_22-25-47_pipeline.json` for §4.2 and §4.3.
+The values survive only as transcriptions in `learning_notes/10_optimization.md`
+and `learning_notes/11_pipeline.md`, kept at the tag `archive/pre-cleanup-2026-10`.

@@ -35,7 +35,7 @@ inline constexpr size_t kTradeBufCap = 4096;
  *     - 桶连续排列，零额外堆分配，cache 局部性显著优于 std::unordered_map
  *     - reserve(65536) 避免 rehash；flat_hash_map 默认 load_factor ≤ 0.875
  *
- * 优化前快照（deque 版本）见：docs/snapshots/order_book_v1_deque.{h,cpp}
+ * 优化前快照（deque 版本）见 tag archive/pre-cleanup-2026-10：docs/snapshots/order_book_v1_deque.{h,cpp}
  */
 class OrderBook {
 public:

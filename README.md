@@ -299,7 +299,9 @@ Matching_Machine/
 │   ├── install_bench_env.sh       # Install the root-owned copy that sudo may run
 │   ├── capture_env.sh             # Record the environment of a measurement
 │   ├── bench_record.py            # Record a study: repeated launches with telemetry
-│   └── bench_report.py            # Turn a study into tables
+│   ├── bench_report.py            # Turn a study into tables
+│   ├── bench_diagnose.py          # Record a matrix of focused diagnostic conditions
+│   └── diagnostics/               # Diagnostic summaries and a thread-placement interposer
 ├── tests/
 │   ├── test_order_book.cpp
 │   ├── test_spsc_ring_buffer.cpp
@@ -308,8 +310,8 @@ Matching_Machine/
 ├── docs/
 │   ├── AUDIT.md                   # Benchmark methodology audit — read before citing §4
 │   ├── BENCHMARKING.md            # How measurements are made and checked
-│   ├── evidence/                  # Recorded studies and the surviving cloud VM result file
-│   └── snapshots/                 # Pre-optimization snapshots for diff reference
+│   ├── project_overview.md        # Chinese write-up from the cloud VM period
+│   └── evidence/                  # Recorded studies and the surviving cloud VM result file
 └── CMakeLists.txt
 ```
 
