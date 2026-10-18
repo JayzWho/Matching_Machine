@@ -5,15 +5,16 @@ Recorded on 2026-10-15 on the 11th Gen Intel Core i5-1135G7 at commit `40a57bc`.
 This is the current control. The benchmark programs still contain the defects
 listed in [`docs/AUDIT.md`](../../../AUDIT.md), so the numbers describe these
 programs on this machine and not how fast the engine is. It replaces the
-[control of 2026-10-12](../2026-10-12_15-11-09_e8870ee_control-repeatability/REPORT.md),
-called the previous control below.
+[control of 2026-10-12](https://github.com/JayzWho/Matching_Machine/blob/archive/pre-cleanup-2026-10/docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-12_15-11-09_e8870ee_control-repeatability/REPORT.md),
+called the previous control below. Both it and the launch-variance
+investigation are kept at the tag `archive/pre-cleanup-2026-10`.
 
 ## What changed since the previous control
 
 Only `bench_baseline_mutex` was rebuilt, with two changes. Its producer sets the
 completion flag under the queue mutex, which removes a hang. Its engine object
 is declared `alignas(64)`: the
-[launch-variance investigation](../2026-10-14_13-32-00_65a2223_launch-variance/REPORT.md)
+[launch-variance investigation](https://github.com/JayzWho/Matching_Machine/blob/archive/pre-cleanup-2026-10/docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-14_13-32-00_65a2223_launch-variance/REPORT.md)
 found that the mutex pipeline runs at one of two levels depending on the
 object's address modulo 64, which address-space randomisation changes at every
 launch. Aligned, the object sits at offset 0 in every launch, the slower level.
