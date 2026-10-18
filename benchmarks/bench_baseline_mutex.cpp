@@ -343,8 +343,13 @@ private:
             cv_.notify_one();
         }
 
-        // 通知消费者：生产者已完成
-        producer_done_.store(true, std::memory_order_release);
+        // 通知消费者：生产者已完成。
+        // 标志必须在锁内设置：消费者持锁检查条件后才登记等待，
+        // 锁外的设置和通知可能落在这两步之间，通知丢失，消费者永久等待。
+        {
+            std::lock_guard<std::mutex> lk(queue_mtx_);
+            producer_done_.store(true, std::memory_order_release);
+        }
         cv_.notify_all();
     }
 
