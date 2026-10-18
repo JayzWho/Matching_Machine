@@ -178,6 +178,36 @@ foreach(test_target
   add_test(NAME ${test_target} COMMAND ${test_target})
 endforeach()
 
+# 测量脚本的测试：不依赖构建产物，也不进入测量模式。登记在此，
+# ctest 一次跑完全部测试；ctest -L scripts 只跑这一组，-LE scripts 跳过它们。
+foreach(script_test
+    scripts/env/test_bench_env.sh
+    scripts/env/test_install_bench_env.sh)
+  get_filename_component(script_test_name ${script_test} NAME_WE)
+  add_test(NAME ${script_test_name}
+           COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/${script_test}
+           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(${script_test_name} PROPERTIES LABELS scripts)
+endforeach()
+
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_FOUND)
+  foreach(script_test
+      scripts/record/test_bench_diagnose.py
+      scripts/report/test_bench_report.py
+      scripts/report/test_diagnose_report.py
+      scripts/diagnostics/test_thread_affinity.py)
+    get_filename_component(script_test_name ${script_test} NAME_WE)
+    # -B：不在源码树里写 __pycache__
+    add_test(NAME ${script_test_name}
+             COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/${script_test}
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(${script_test_name} PROPERTIES LABELS scripts)
+  endforeach()
+else()
+  message(STATUS "Python 3 not found: the Python script tests are not registered")
+endif()
+
 # ── Benchmark 套件 ────────────────────────────────────────────────────────────
 add_executable(bench_order_book       benchmarks/bench_order_book.cpp)
 add_executable(bench_spsc_ring_buffer benchmarks/bench_spsc_ring_buffer.cpp)

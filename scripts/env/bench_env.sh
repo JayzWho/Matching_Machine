@@ -9,16 +9,16 @@
 #
 # Usage (after the one-time install, the privileged commands can also be run
 # as `sudo -n /usr/local/sbin/mm-bench-env setup|restore` — see below):
-#   sudo ./scripts/bench_env.sh setup              enter measurement mode
-#        ./scripts/bench_env.sh setup --dry-run    show what setup would do
-#   sudo ./scripts/bench_env.sh setup --cpus 1,3   override core selection
-#   sudo ./scripts/bench_env.sh restore            restore the saved state
-#        ./scripts/bench_env.sh status             current state
-#        ./scripts/bench_env.sh throttle           thermal throttle counters
-#        ./scripts/bench_env.sh cores              measurement-core ranking
-#        ./scripts/bench_env.sh cores --list       selected cores, best first
-#        ./scripts/bench_env.sh cores --rationale  ranking as one line
-#        ./scripts/bench_env.sh cores --selection  pinned / ranked / override
+#   sudo ./scripts/env/bench_env.sh setup              enter measurement mode
+#        ./scripts/env/bench_env.sh setup --dry-run    show what setup would do
+#   sudo ./scripts/env/bench_env.sh setup --cpus 1,3   override core selection
+#   sudo ./scripts/env/bench_env.sh restore            restore the saved state
+#        ./scripts/env/bench_env.sh status             current state
+#        ./scripts/env/bench_env.sh throttle           thermal throttle counters
+#        ./scripts/env/bench_env.sh cores              measurement-core ranking
+#        ./scripts/env/bench_env.sh cores --list       selected cores, best first
+#        ./scripts/env/bench_env.sh cores --rationale  ranking as one line
+#        ./scripts/env/bench_env.sh cores --selection  pinned / ranked / override
 #
 # What setup changes, and why:
 #
@@ -66,7 +66,7 @@
 # Security model (this script is meant to be runnable via a NOPASSWD rule):
 #
 #   - The sudoers rule must name the ROOT-OWNED copy installed by
-#     scripts/install_bench_env.sh (/usr/local/sbin/mm-bench-env), never this
+#     scripts/env/install_bench_env.sh (/usr/local/sbin/mm-bench-env), never this
 #     file. This file lives in a user-writable repository; anyone who can edit
 #     it would get root through such a rule.
 #   - State lives in /run/matching-machine-bench/. /run is root-owned and 0755,
@@ -497,7 +497,7 @@ cmd_cores() {
     if [ ! -e "$PIN_FILE" ] && [ ! -L "$PIN_FILE" ]; then
         echo "  [!] NOT pinned: this choice comes from the live ranking below, whose inputs"
         echo "      reset on reboot, so it can change between boots and break comparability."
-        echo "      Pin a pair with:  sudo ./scripts/install_bench_env.sh --pin A,B"
+        echo "      Pin a pair with:  sudo ./scripts/env/install_bench_env.sh --pin A,B"
     fi
     echo
     echo "live ranking of physical cores (advisory, best candidate first):"
@@ -545,7 +545,7 @@ cmd_setup() {
         ranked*)
             warn "no cores are pinned: this selection depends on since-boot counters and"
             warn "can differ after a reboot, making results incomparable with earlier runs."
-            warn "pin a pair with: sudo ./scripts/install_bench_env.sh --pin A,B" ;;
+            warn "pin a pair with: sudo ./scripts/env/install_bench_env.sh --pin A,B" ;;
     esac
     echo "    ranking           : $rationale"
     echo "[*] housekeeping cores: ${housekeeping:-(none)}"
@@ -737,7 +737,7 @@ main() {
     esac
 }
 
-# Only dispatch when executed. When sourced (scripts/test_bench_env.sh), the
+# Only dispatch when executed. When sourced (scripts/env/test_bench_env.sh), the
 # file just defines its functions so they can be tested without root.
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     main "$@"

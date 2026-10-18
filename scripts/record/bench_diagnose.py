@@ -162,7 +162,7 @@ class DiagnosticStudy:
 
     def capture_env(self, name):
         path = self.raw / name
-        result = recorder.run("scripts/capture_env.sh", str(path), str(recorder.BUILD))
+        result = recorder.run("scripts/env/capture_env.sh", str(path), str(recorder.BUILD))
         if result.returncode:
             (self.raw / f"{name}.error.log").write_text(result.stdout + result.stderr)
             raise RuntimeError(f"environment capture failed: {result.stderr}")
@@ -189,7 +189,7 @@ class DiagnosticStudy:
                 raise RuntimeError(f"setup failed: {result.stdout}{result.stderr}")
             if pending:
                 raise SystemExit(128 + pending[0])
-            listed = recorder.run("scripts/bench_env.sh", "cores", "--list")
+            listed = recorder.run("scripts/env/bench_env.sh", "cores", "--list")
             cores = [int(c) for c in listed.stdout.strip().split(",") if c]
             online, measure = recorder.online_cpus(), set(cores)
             if listed.returncode or len(cores) != 2 or not measure <= online or not online - measure:
