@@ -91,7 +91,7 @@ def main():
     if text.count(marker) != 1:
         raise SystemExit("Cannot identify the original throughput function uniquely")
     prefix, function = text.split(marker, 1)
-    original = "    MutexMatchingEngine engine;\n    for (auto _ : state) {"
+    original = "    alignas(64) MutexMatchingEngine engine;\n    for (auto _ : state) {"
     if not function.startswith("\n") or original not in function:
         raise SystemExit("Cannot identify original throughput local storage")
     function = function.replace(original,

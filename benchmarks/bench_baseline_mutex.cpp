@@ -422,7 +422,9 @@ static void BM_MutexPipeline_Throughput(benchmark::State& state) {
     const size_t order_count = static_cast<size_t>(state.range(0));
     constexpr double cancel_ratio = 0.2;
 
-    MutexMatchingEngine engine;
+    // 对象固定从缓存行开头开始。否则栈地址随机化让它每次启动落在不同偏移，
+    // 两个线程共用的字段如何分布在缓存行上随之改变，吞吐在两档之间跳动。
+    alignas(64) MutexMatchingEngine engine;
     for (auto _ : state) {
         engine.start("BTCUSD", 100'000'000LL, order_count, cancel_ratio);
         engine.stop();
@@ -447,7 +449,7 @@ BENCHMARK(BM_MutexPipeline_Throughput)
 // 与 BM_Pipeline_LatencyReport 对称，运行 100K 订单后输出完整延迟百分位。
 
 static void BM_MutexPipeline_LatencyReport(benchmark::State& state) {
-    MutexMatchingEngine engine;
+    alignas(64) MutexMatchingEngine engine;  // 与吞吐测试相同，固定对象位置
     for (auto _ : state) {
         state.PauseTiming();
         engine.start("BTCUSD", 100'000'000LL, 100'000, 0.2);
