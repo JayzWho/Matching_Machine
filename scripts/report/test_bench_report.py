@@ -2,7 +2,7 @@
 """Check the launch test of bench_report.py on synthetic launches.
 
 Usage:
-    scripts/test_bench_report.py
+    scripts/report/test_bench_report.py
 
 Draws 16 launches of 5 repetitions with 2% scatter, 100 times for each of three
 cases, and counts how often the test marks the benchmark as moving between

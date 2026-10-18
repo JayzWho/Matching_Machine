@@ -8,9 +8,9 @@
 # benchmark output.
 #
 # Usage:
-#   ./scripts/capture_env.sh                        # JSON to stdout
-#   ./scripts/capture_env.sh env.json               # JSON to file
-#   ./scripts/capture_env.sh env.json build/release # read flags from that build
+#   ./scripts/env/capture_env.sh                        # JSON to stdout
+#   ./scripts/env/capture_env.sh env.json               # JSON to file
+#   ./scripts/env/capture_env.sh env.json build/release # read flags from that build
 #
 # Needs no root. See docs/AUDIT.md for why each field is recorded.
 # =============================================================================

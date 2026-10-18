@@ -8,13 +8,13 @@
 # file named in a NOPASSWD rule has root.
 #
 # Usage:
-#   sudo ./scripts/install_bench_env.sh              install or update the copy
-#   sudo ./scripts/install_bench_env.sh --pin A,B    install/update, then pin the
-#                                                    measurement cores (A runs the
-#                                                    single-threaded benchmarks)
-#   sudo ./scripts/install_bench_env.sh --unpin      remove the pin
-#        ./scripts/install_bench_env.sh --check      report status (no root)
-#   sudo ./scripts/install_bench_env.sh --uninstall  remove the copy
+#   sudo ./scripts/env/install_bench_env.sh              install or update the copy
+#   sudo ./scripts/env/install_bench_env.sh --pin A,B    install/update, then pin the
+#                                                        measurement cores (A runs the
+#                                                        single-threaded benchmarks)
+#   sudo ./scripts/env/install_bench_env.sh --unpin      remove the pin
+#        ./scripts/env/install_bench_env.sh --check      report status (no root)
+#   sudo ./scripts/env/install_bench_env.sh --uninstall  remove the copy
 #
 # Why pin: measurements are only comparable when they run on the same cores.
 # Left unpinned, bench_env.sh ranks cores by counters that reset on reboot, so
@@ -43,8 +43,8 @@ DEST="/usr/local/sbin/mm-bench-env"
 SUDOERS_FILE="/etc/sudoers.d/matching-machine-bench"
 PIN_FILE="/etc/matching-machine-bench.conf"
 STATE_FILE="/run/matching-machine-bench/state"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$ROOT/scripts/bench_env.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SRC="$ROOT/scripts/env/bench_env.sh"
 
 die() { echo "[!] $*" >&2; exit 1; }
 sha() { sha256sum -- "$1" 2>/dev/null | cut -d' ' -f1; }
@@ -220,10 +220,10 @@ install_copy() {
         # predictable path in a world-writable directory like /tmp.
         local out t
         for t in test_bench_env.sh test_install_bench_env.sh; do
-            echo "[*] running scripts/$t as $user..."
-            if ! out="$(runuser -u "$user" -- "$ROOT/scripts/$t" 2>&1)"; then
+            echo "[*] running scripts/env/$t as $user..."
+            if ! out="$(runuser -u "$user" -- "$ROOT/scripts/env/$t" 2>&1)"; then
                 printf '%s\n' "$out"
-                die "scripts/$t failed; not installing"
+                die "scripts/env/$t failed; not installing"
             fi
             printf '%s\n' "$out" | tail -1
         done
@@ -256,7 +256,7 @@ pin_cores() {
     tmp="$(mktemp /etc/.matching-machine-bench.XXXXXX)"
     {
         echo "# Measurement cores for the Matching_Machine benchmarks, solo core first."
-        echo "# Written by scripts/install_bench_env.sh --pin; read by mm-bench-env setup."
+        echo "# Written by scripts/env/install_bench_env.sh --pin; read by mm-bench-env setup."
         echo "# Must stay root-owned and not group/world-writable, or it is refused."
         echo "MEASURE_CPUS=$pair"
     } > "$tmp"
@@ -303,7 +303,7 @@ main() {
     esac
 }
 
-# Only dispatch when executed; when sourced (scripts/test_install_bench_env.sh)
+# Only dispatch when executed; when sourced (scripts/env/test_install_bench_env.sh)
 # the file just defines its functions.
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     main "$@"

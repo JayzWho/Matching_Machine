@@ -37,31 +37,38 @@ of the mutex pipeline; see [`evidence/README.md`](evidence/README.md).
 
 ## The scripts
 
+`scripts/` is grouped by step: put the machine into measurement mode (`env/`),
+record (`record/`), turn the records into tables (`report/`), and alter a
+launch for a diagnostic condition (`diagnostics/`). Each test sits next to the
+script it tests, and `ctest` runs all of them (`ctest -L scripts` only those).
+
 | Script | Needs root | Purpose |
 |---|---|---|
-| `scripts/bench_env.sh` | for `setup` and `restore` | Enters and leaves measurement mode: frequency pinned at base with turbo off, SMT siblings offline, movable device interrupts steered to the other cores, `perf_event_paranoid` lowered. `status`, `cores` and `throttle` need no root |
-| `scripts/install_bench_env.sh` | once | Installs a root-owned copy of `bench_env.sh` at `/usr/local/sbin/mm-bench-env`, so that one sudoers rule can allow `setup` and `restore` without a password. `--pin` fixes the measurement cores, `--check` verifies the installation |
-| `scripts/capture_env.sh` | no | Writes a JSON record of the commit, toolchain, build flags, CPU, frequency policy, thermal state and measurement cores |
-| `scripts/bench_record.py` | no | Records a study. Enters and leaves measurement mode itself through the sudoers rule |
-| `scripts/bench_report.py` | no | Turns a study directory into Markdown tables |
-| `scripts/bench_diagnose.py` | no | Records a rotating matrix of focused diagnostic conditions, entering and restoring measurement mode itself |
-| `scripts/diagnostics/` | no | Tables from a diagnostic study (`summarize.py`), and an interposer that places each worker thread on a chosen CPU (`thread_affinity.c`, described in `thread_affinity.md`) |
-| `scripts/test_bench_report.py` | no | Checks the statistical test of `bench_report.py` on synthetic launches |
-| `scripts/test_bench_env.sh`, `scripts/test_install_bench_env.sh` | no | Tests of the two scripts that touch privilege |
-| `scripts/test_bench_diagnose.py`, `scripts/diagnostics/test_*.py` | no | Tests of the diagnostic runner, the summaries and the interposer |
+| `env/bench_env.sh` | for `setup` and `restore` | Enters and leaves measurement mode: frequency pinned at base with turbo off, SMT siblings offline, movable device interrupts steered to the other cores, `perf_event_paranoid` lowered. `status`, `cores` and `throttle` need no root |
+| `env/install_bench_env.sh` | once | Installs a root-owned copy of `bench_env.sh` at `/usr/local/sbin/mm-bench-env`, so that one sudoers rule can allow `setup` and `restore` without a password. `--pin` fixes the measurement cores, `--check` verifies the installation |
+| `env/capture_env.sh` | no | Writes a JSON record of the commit, toolchain, build flags, CPU, frequency policy, thermal state and measurement cores |
+| `record/bench_record.py` | no | Records a study of the four binaries. Enters and leaves measurement mode itself through the sudoers rule |
+| `record/bench_diagnose.py` | no | Records a rotating matrix of focused diagnostic conditions, entering and restoring measurement mode itself |
+| `report/bench_report.py` | no | Turns a study directory into Markdown tables |
+| `report/diagnose_report.py` | no | Turns a diagnostic study into Markdown or CSV tables |
+| `diagnostics/thread_affinity.c` | no | A preloaded library that places each new worker thread on a chosen CPU; `thread_affinity.md` describes it |
+| `env/test_bench_env.sh`, `env/test_install_bench_env.sh` | no | Tests of the two scripts that touch privilege |
+| `record/test_bench_diagnose.py` | no | Tests of the diagnostic runner's validation and failure cleanup |
+| `report/test_bench_report.py`, `report/test_diagnose_report.py` | no | Checks of the statistical test of `bench_report.py` on synthetic launches, and of the diagnostic tables |
+| `diagnostics/test_thread_affinity.py` | no | Builds the preloaded library and checks its placement on a small program |
 
 ## Recording a study
 
 ```bash
 # Once per machine. The script prints the sudoers rule to add.
-sudo scripts/install_bench_env.sh
-sudo scripts/install_bench_env.sh --pin "$(scripts/bench_env.sh cores --list)"
+sudo scripts/env/install_bench_env.sh
+sudo scripts/env/install_bench_env.sh --pin "$(scripts/env/bench_env.sh cores --list)"
 
 # Every time.
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/release -j"$(nproc)"
-scripts/bench_record.py --label control
-scripts/bench_report.py docs/evidence/<cpu>/<study>
+scripts/record/bench_record.py --label control
+scripts/report/bench_report.py docs/evidence/<cpu>/<study>
 ```
 
 `bench_record.py` runs four sessions of eight rounds with five repetitions by
@@ -76,7 +83,7 @@ afterwards. It cannot move tasks of other users, kernel threads, or a task of
 the user that holds a capability the recorder lacks, such as `systemd --user`,
 so it measures them instead (see `foreign_ms` below).
 
-`scripts/bench_record.py --smoke` is a one-minute wiring check whose output is
+`scripts/record/bench_record.py --smoke` is a one-minute wiring check whose output is
 discarded. Add `--unpinned` to run it outside measurement mode.
 
 ## What is recorded for every launch
@@ -124,7 +131,7 @@ correlation with recording order tests for a trend over time.
 The test compares the rank sums of the launches (the Kruskal-Wallis statistic)
 and not their spread, because a benchmark that settles on one of two levels at
 each launch keeps the same spread when its repetitions are shuffled.
-`scripts/test_bench_report.py` checks the test on synthetic launches: it stays
+`scripts/report/test_bench_report.py` checks the test on synthetic launches: it stays
 quiet when launches do not differ and finds both a gradual difference and a
 two-level one. A single launch that is slower than the rest shows in the spread
 and in the count of launches beyond scatter more reliably than in p.
@@ -149,13 +156,13 @@ repetitions inside one launch says nothing about the next launch.
 
 ## Diagnostic runs
 
-`scripts/bench_diagnose.py` records a focused question instead of the four
+`scripts/record/bench_diagnose.py` records a focused question instead of the four
 binaries. Its input is a JSON matrix of conditions, each naming an executable
 and a benchmark filter, and optionally a command prefix, environment overrides
 and arguments. A diagnostic **block** launches each condition once, in an order
-that rotates between blocks; `python3 scripts/bench_diagnose.py --help` lists
+that rotates between blocks; `python3 scripts/record/bench_diagnose.py --help` lists
 the options. The output has the layout of a study plus `matrix.json`, and
-`scripts/diagnostics/summarize.py` prints its tables.
+`scripts/report/diagnose_report.py` prints its tables.
 
 - Build every executable first. The runner does not build.
 - Keep the length of the arguments and of the environment fixed within a study:
