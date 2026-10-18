@@ -5,7 +5,7 @@
  *
  * 本文件包含：
  *   1. OrderBookV1  — v1 deque 版本（std::mutex + std::deque + std::unordered_map），
- *                    逻辑与 docs/snapshots/order_book_v1_deque.{h,cpp} 完全一致，
+ *                    逻辑与 docs/snapshots/order_book_v1_deque.{h,cpp}（见 tag archive/pre-cleanup-2026-10）完全一致，
  *                    内联于此文件以避免与主项目 order_book.h 的命名冲突。
  *   2. MutexMatchingEngine — 极简双线程实现：
  *                    Producer: 生成订单，写 RDTSC 时间戳，加锁 push + notify
@@ -18,7 +18,7 @@
  *   cmake --build build/release -j$(nproc)
  *   taskset -c 0,1 ./build/release/bench_baseline_mutex
  *
- * 对比目标（SPSC 优化版，来自 learning_notes/11_pipeline.md）：
+ * 对比目标（SPSC 优化版，来自 learning_notes/11_pipeline.md，见 tag archive/pre-cleanup-2026-10）：
  *   吞吐：10K=1.75M/s，50K=3.23M/s，100K=3.15M/s
  *   P50：~1.26ms，P99：~2.49ms（VM 环境）
  *
@@ -50,7 +50,7 @@
 
 // ─── 1. OrderBookV1：v1 deque 版本（完整内联，me_v1 命名空间隔离） ───────────
 //
-// 逻辑与 docs/snapshots/order_book_v1_deque.{h,cpp} 完全相同，
+// 逻辑与 docs/snapshots/order_book_v1_deque.{h,cpp}（见 tag archive/pre-cleanup-2026-10）完全相同，
 // 保留所有"未优化"特征：
 //   - std::deque<Order*> 作为 PriceLevel 队列（非 cache-friendly）
 //   - std::unordered_map 无 reserve（高频插入触发 rehash）

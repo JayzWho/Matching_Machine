@@ -18,7 +18,7 @@ compile_commands.json
 *~
 
 # Personal and sensitive materials
-learning_notes/private/
+learning_notes/
 
 # Benchmark results (keep only selected baseline files)
 results/
@@ -35,3 +35,6 @@ Thumbs.db
 docs/private/
 docs/Interview_Prepare/
 data/
+
+# Claude
+CLAUDE.md
