@@ -20,6 +20,10 @@ These programs still contain the defects described in `AUDIT.md`. A recording
 of them in that state is called a **control**: it exists so that a later fix
 can be compared with the unfixed code on the same machine.
 
+`bench_baseline_mutex` declares its engine object `alignas(64)`. Without it,
+the address-space layout of each launch chose between two performance levels
+of the mutex pipeline; see [`evidence/README.md`](evidence/README.md).
+
 ## Vocabulary
 
 | Term | Meaning |
@@ -41,9 +45,10 @@ can be compared with the unfixed code on the same machine.
 | `scripts/bench_record.py` | no | Records a study. Enters and leaves measurement mode itself through the sudoers rule |
 | `scripts/bench_report.py` | no | Turns a study directory into Markdown tables |
 | `scripts/bench_diagnose.py` | no | Records a rotating matrix of focused diagnostic conditions, entering and restoring measurement mode itself |
+| `scripts/diagnostics/` | no | Tables from a diagnostic study (`summarize.py`), and an interposer that places each worker thread on a chosen CPU (`thread_affinity.c`, described in `thread_affinity.md`) |
 | `scripts/test_bench_report.py` | no | Checks the statistical test of `bench_report.py` on synthetic launches |
 | `scripts/test_bench_env.sh`, `scripts/test_install_bench_env.sh` | no | Tests of the two scripts that touch privilege |
-| `scripts/run_perf.sh` | — | Profiling helper from the cloud VM period. It has the defects listed in `AUDIT.md` and is not part of this workflow |
+| `scripts/test_bench_diagnose.py`, `scripts/diagnostics/test_*.py` | no | Tests of the diagnostic runner, the summaries and the interposer |
 
 ## Recording a study
 
@@ -142,52 +147,28 @@ repetitions inside one launch says nothing about the next launch.
 - A study covers one boot. Whether results move across reboots or kernel
   updates is not covered by it.
 
-## Focused launch-variance experiments
+## Diagnostic runs
 
-[The launch-variance investigation](evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-14_13-32-00_65a2223_launch-variance/REPORT.md)
-finds what selects the mutex pipeline's two levels: the engine object's address
-modulo 64. It compares the unchanged binary with and without ASLR, fixes the
-offset in a separate placement binary, varies worker placement and records
-hardware counters. It does not explain the variance of the queue benchmarks.
+`scripts/bench_diagnose.py` records a focused question instead of the four
+binaries. Its input is a JSON matrix of conditions, each naming an executable
+and a benchmark filter, and optionally a command prefix, environment overrides
+and arguments. A diagnostic **block** launches each condition once, in an order
+that rotates between blocks; `python3 scripts/bench_diagnose.py --help` lists
+the options. The output has the layout of a study plus `matrix.json`, and
+`scripts/diagnostics/summarize.py` prints its tables.
 
-`bench_baseline_mutex` now declares its engine `alignas(64)`, which puts it at
-offset 0 in every launch: the slower of the two levels in this build. The
-placement binary still varies the offset for diagnostics.
-
-`python3 scripts/bench_diagnose.py --help` describes the condition-matrix runner.
-A diagnostic **block** executes each condition once and rotates order between
-blocks. This does not replace the four-program definition of a round. Matrices
-select an executable, benchmark filter, optional command prefix and environment
-overrides. They keep output argument lengths fixed within a study. Sources and
-executables must be built before recording.
-
-The diagnostic runner samples frequency after 0.1 seconds without output;
-the original recorder retains its one-second default. A recorded frequency
-policy is distinct from observed frequency samples. Prefixes that spawn a
-child, such as perf and GDB, require care: the recorder's process CPU clock may
-follow the wrapper. Use the completed target JSON for scores and the profiler's
-own counters; do not infer target CPU time or foreign CPU activity from wrapper
-accounting. The GDB address observations explicitly detach before timing.
-
-In the `cleared` condition the runner stops when a task of the user refuses the
-new CPU mask. The kernel refuses it for a process that holds a capability the
-recorder lacks: on this machine `systemd --user` (`CAP_WAKE_ALARM`) and a
-running VirtualBox VM. `--allow-unmovable NAME` accepts the tasks of one named
-process; they are counted in `launches.csv` and named in `env.json`, and the
-foreign CPU time of every launch shows whether they ran on the measurement
-cores. Save a VM's state before a study rather than pausing it, so that its
-process exits.
-
-A launch still running after `--launch-timeout` seconds (300 by default) is
-killed and the study stops. The mutex baseline hung this way once on
-2026-10-14, after about 3,000 pipeline iterations of the re-recorded
-launch-variance studies: its producer set the completion flag without holding
-the queue mutex, so a consumer that had just found the queue empty could miss
-the notification and wait forever. The producer now sets the flag under the
-mutex. A stress program that reproduces the hang, and the throughput before
-and after the fix, are kept under the tag `archive/mutex-lost-wakeup`.
-
-The runner preserves partial output on failure and restores measurement mode
-and saved affinities before reporting an error. Its failure-path tests are in
-`scripts/test_bench_diagnose.py`; the diagnostic summary and thread-placement
-checks are under `scripts/diagnostics/`.
+- Build every executable first. The runner does not build.
+- Keep the length of the arguments and of the environment fixed within a study:
+  they move the stack, and the placement of an object on the stack has been
+  shown to select a performance level.
+- A prefix that wraps the benchmark, such as `perf` or GDB, takes over the
+  recorder's accounting of the launch's CPU time. Take scores from the
+  benchmark's JSON and CPU counts from the profiler.
+- In `cleared`, the runner stops when a task of the user refuses the new CPU
+  mask. On this machine `systemd --user` (`CAP_WAKE_ALARM`) and a running
+  VirtualBox VM do. `--allow-unmovable NAME` accepts the tasks of one named
+  process and records them in `launches.csv` and `env.json`. Save a VM's state
+  rather than pausing it, so that its process exits.
+- A launch still running after `--launch-timeout` seconds (300 by default) is
+  killed and the study stops. Partial output is kept, and measurement mode and
+  the saved affinities are restored before the error is reported.
