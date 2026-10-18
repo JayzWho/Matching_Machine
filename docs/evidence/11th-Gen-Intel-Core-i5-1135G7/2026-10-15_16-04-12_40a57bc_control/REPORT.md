@@ -23,7 +23,7 @@ records the same SHA-256 for each.
 
 ## How it was recorded
 
-The same design as the previous control: `scripts/bench_record.py --label control`,
+The same design as the previous control: `scripts/record/bench_record.py --label control`,
 4 sessions of 8 rounds with 5 repetitions, 32 launches of each binary, half of
 them in `shared` and half in `cleared`. A launch is represented by the median of
 its repetitions. The VirtualBox VM was saved for the whole study, so its process
@@ -75,8 +75,8 @@ of 5.4.
 
 ```bash
 cmake --build build/release -j"$(nproc)"
-scripts/bench_record.py --label control
-scripts/bench_report.py docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-15_16-04-12_40a57bc_control
+scripts/record/bench_record.py --label control
+scripts/report/bench_report.py docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-15_16-04-12_40a57bc_control
 ```
 
 The last command prints the full tables: per-benchmark launch statistics,

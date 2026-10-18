@@ -12,14 +12,14 @@ Vocabulary
                          other online cores for the duration of the round
 
 Usage
-    scripts/bench_record.py [--label L] [--sessions S] [--rounds N]
-                            [--repetitions R] [--conditions shared,cleared]
-    scripts/bench_record.py --smoke [--unpinned]      # short wiring check, output discarded
-    scripts/bench_record.py --restore-affinity FILE   # after a killed run; FILE is the
-                                                      # affinity_baseline.json it left behind
+    scripts/record/bench_record.py [--label L] [--sessions S] [--rounds N]
+                                   [--repetitions R] [--conditions shared,cleared]
+    scripts/record/bench_record.py --smoke [--unpinned]      # short wiring check, output discarded
+    scripts/record/bench_record.py --restore-affinity FILE   # after a killed run; FILE is the
+                                                             # affinity_baseline.json it left behind
 
 A study needs the root-owned copy of bench_env.sh and its password-free sudo
-rule (scripts/install_bench_env.sh): this script enters and leaves measurement
+rule (scripts/env/install_bench_env.sh): this script enters and leaves measurement
 mode itself, with exactly `sudo -n /usr/local/sbin/mm-bench-env setup` and
 `... restore`. --unpinned skips both and marks the result INVALID.
 
@@ -31,7 +31,7 @@ Output: docs/evidence/<cpu>/<date>_<commit>_<label>/
     env.json       design, binaries, environment before and after each session
     raw.tar.gz     every raw file: Google Benchmark JSON, console output, setup output
 
-scripts/bench_report.py turns that directory into tables.
+scripts/report/bench_report.py turns that directory into tables.
 """
 import argparse
 import csv
@@ -48,7 +48,7 @@ import tempfile
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build" / "release"
 INSTALLED = "/usr/local/sbin/mm-bench-env"
 STATE_FILE = Path("/run/matching-machine-bench/state")
@@ -438,7 +438,7 @@ class Study:
         if STATE_FILE.exists():
             die("measurement mode is already active; run `sudo -n /usr/local/sbin/mm-bench-env restore` first")
         if not o.unpinned and not os.access(INSTALLED, os.X_OK):
-            die(f"{INSTALLED} is not installed; see scripts/install_bench_env.sh, or pass --unpinned")
+            die(f"{INSTALLED} is not installed; see scripts/env/install_bench_env.sh, or pass --unpinned")
         if run("cmake", "--build", str(BUILD), f"-j{os.cpu_count()}").returncode != 0:
             die("Release build failed")
         sha = run("git", "rev-parse", "--short", "HEAD").stdout.strip()
@@ -466,7 +466,7 @@ class Study:
 
     def capture_env(self, name):
         path = self.raw / name
-        run("scripts/capture_env.sh", str(path), str(BUILD))
+        run("scripts/env/capture_env.sh", str(path), str(BUILD))
         return json.loads(path.read_text())
 
     def session(self, s):
@@ -479,7 +479,7 @@ class Study:
             if done.returncode != 0:
                 die(f"setup failed:\n{done.stdout}{done.stderr}")
             self.entered = True
-        listed = run("scripts/bench_env.sh", "cores", "--list")
+        listed = run("scripts/env/bench_env.sh", "cores", "--list")
         cores = [int(c) for c in listed.stdout.strip().split(",") if c]
         if listed.returncode != 0 or len(cores) != 2:
             die(f"could not determine the measurement cores: {listed.stdout}{listed.stderr}")

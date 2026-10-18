@@ -239,6 +239,10 @@ ctest --test-dir build/debug --output-on-failure
 `test_spsc_ring_buffer` (10, including two concurrent producer/consumer tests) and
 `test_memory_pool` (9). All pass under both configurations.
 
+The same command runs the six tests of the measurement scripts, which need no
+build and no root. `ctest -L scripts` runs only those, `ctest -LE scripts` only
+the GTest targets.
+
 ### Known toolchain constraint
 
 Under GCC 15, UBSan's `null` and `function` sub-checks are incompatible with Abseil's
@@ -254,13 +258,13 @@ group. Null-pointer dereferences remain covered by ASan. Reproduced against both
 ```bash
 # Once per machine: install the measurement-mode script. It prints the sudoers
 # rule that lets `setup` and `restore` run without a password.
-sudo scripts/install_bench_env.sh
+sudo scripts/env/install_bench_env.sh
 
 # Record a study, then print its tables. The recorder enters measurement mode
 # (pinned frequency, SMT siblings offline, device interrupts steered away),
 # launches every benchmark binary repeatedly, and leaves measurement mode.
-scripts/bench_record.py --label control
-scripts/bench_report.py docs/evidence/<cpu>/<study>
+scripts/record/bench_record.py --label control
+scripts/report/bench_report.py docs/evidence/<cpu>/<study>
 ```
 
 A binary can also be started by hand for a quick look, for example
@@ -294,14 +298,11 @@ Matching_Machine/
 │   ├── bench_spsc_ring_buffer.cpp # Ring buffer microbenchmarks, with a mutex queue for comparison
 │   ├── bench_matching_engine.cpp  # SPSC pipeline end-to-end benchmark
 │   └── bench_baseline_mutex.cpp   # Mutex baseline (self-contained, does not touch src/)
-├── scripts/
-│   ├── bench_env.sh               # Enter and leave measurement mode
-│   ├── install_bench_env.sh       # Install the root-owned copy that sudo may run
-│   ├── capture_env.sh             # Record the environment of a measurement
-│   ├── bench_record.py            # Record a study: repeated launches with telemetry
-│   ├── bench_report.py            # Turn a study into tables
-│   ├── bench_diagnose.py          # Record a matrix of focused diagnostic conditions
-│   └── diagnostics/               # Diagnostic summaries and a thread-placement interposer
+├── scripts/                       # Measurement tooling; each test sits next to its script
+│   ├── env/                       # Measurement mode: enter/leave, install, record the environment
+│   ├── record/                    # Record a study, or a matrix of diagnostic conditions
+│   ├── report/                    # Turn a recorded study into tables
+│   └── diagnostics/               # Tools that alter a launch for a diagnostic condition
 ├── tests/
 │   ├── test_order_book.cpp
 │   ├── test_spsc_ring_buffer.cpp

@@ -7,7 +7,7 @@ import tarfile
 import tempfile
 import unittest
 
-import summarize
+import diagnose_report
 
 
 class SummaryTest(unittest.TestCase):
@@ -36,7 +36,7 @@ class SummaryTest(unittest.TestCase):
                 writer.writerows(rows)
 
     def test_independent_launch_medians(self):
-        rows = summarize.summarize(self.path)
+        rows = diagnose_report.summarize(self.path)
         result = next(row for row in rows if row["kind"] == "benchmark")
         self.assertEqual(result["launches"], 2)
         self.assertEqual(result["median_ns"], 150)
@@ -55,7 +55,7 @@ class SummaryTest(unittest.TestCase):
                 "complete": True, "condition": "named_condition"}))
             (raw / f"{stem}.log").write_text("MM_LAYOUT address=0x1010 mod64=16 mod4096=16\n" * 15)
         def layout():
-            return next(row for row in summarize.summarize(self.path) if row["kind"] == "layout")
+            return next(row for row in diagnose_report.summarize(self.path) if row["kind"] == "layout")
         result = layout()
         self.assertEqual(result["condition"], "named_condition")
         self.assertEqual(result["layout_launches"], 2)
@@ -79,26 +79,26 @@ class SummaryTest(unittest.TestCase):
                 "complete": True, "condition": "named_condition"}))
             (raw / f"{stem}.log").write_text(
                 f"MM_LAYOUT address={address:#x} mod64={address % 64} mod4096={address % 4096}\n")
-        rows = [row for row in summarize.summarize(self.path) if row["kind"] == "launch_layout"]
+        rows = [row for row in diagnose_report.summarize(self.path) if row["kind"] == "launch_layout"]
         self.assertEqual([(row["block"], row["mod64"], row["BM_Test (ms)"]) for row in rows],
                          [(2, "0", 200 / 1e6), (1, "48", 100 / 1e6)])
-        self.assertIn("### Layout by launch", summarize.markdown(summarize.summarize(self.path)))
+        self.assertIn("### Layout by launch", diagnose_report.markdown(diagnose_report.summarize(self.path)))
 
     def test_missing_or_duplicate_repetition_rejected(self):
         removed = self.samples.pop()
         self.write_rows()
         with self.assertRaisesRegex(ValueError, "incomplete repetitions"):
-            summarize.summarize(self.path)
+            diagnose_report.summarize(self.path)
         self.samples.append(removed)
         self.samples.append(removed)
         self.write_rows()
         with self.assertRaisesRegex(ValueError, "duplicate repetition"):
-            summarize.summarize(self.path)
+            diagnose_report.summarize(self.path)
 
     def test_incomplete_study_rejected(self):
         (self.path / "env.json").write_text('{"complete": false}')
         with self.assertRaisesRegex(ValueError, "study is incomplete"):
-            summarize.summarize(self.path)
+            diagnose_report.summarize(self.path)
 
 
 if __name__ == "__main__":

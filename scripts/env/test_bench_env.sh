@@ -9,14 +9,14 @@
 # and pass that uid as the "trusted owner". Every attack case uses a payload
 # that would create a marker file if it were ever executed.
 #
-# Usage: ./scripts/test_bench_env.sh
+# Usage: ./scripts/env/test_bench_env.sh
 # =============================================================================
 
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=bench_env.sh
-source "$ROOT/scripts/bench_env.sh"
+source "$ROOT/scripts/env/bench_env.sh"
 # The tests inspect statuses themselves, and a broken implementation must show
 # up as FAILs rather than kill the harness (unset results expand to empty).
 set +eu
@@ -256,7 +256,7 @@ fi
 
 echo "== script contains no source/eval of its own"
 expect "no 'source' or 'eval' outside comments" \
-    '[ "$(grep -nwE "source|eval" "$ROOT/scripts/bench_env.sh" | grep -vcE "^[0-9]+:\s*#")" -eq 0 ]'
+    '[ "$(grep -nwE "source|eval" "$ROOT/scripts/env/bench_env.sh" | grep -vcE "^[0-9]+:\s*#")" -eq 0 ]'
 
 echo
 echo "passed $PASS, failed $FAIL"
