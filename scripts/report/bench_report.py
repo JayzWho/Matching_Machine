@@ -2,7 +2,7 @@
 """Turn a study recorded by bench_record.py into Markdown tables.
 
 Usage:
-    scripts/bench_report.py STUDY_DIR [--permutations N]  > tables.md
+    scripts/report/bench_report.py STUDY_DIR [--permutations N]  > tables.md
 
 Everything is computed from the CSV files in STUDY_DIR and from env.json, with
 the standard library only and a fixed random seed, so the output can be

@@ -41,7 +41,7 @@ per study, named `<date>_[<time>_]<commit>_<label>`:
 
 | File | Contents |
 |---|---|
-| `REPORT.md` | Findings on one page. `scripts/bench_report.py <study>` prints the full tables |
+| `REPORT.md` | Findings on one page. `scripts/report/bench_report.py <study>` prints the full tables |
 | `samples.csv` | One row per repetition |
 | `launches.csv` | One row per launch: validity checks and interference telemetry |
 | `intervals.csv` | One row per benchmark per launch: wall time, CPU time, run-queue wait |
@@ -56,7 +56,7 @@ one subdirectory with the files above per recording.
 
 ## Rules
 
-- A study is written by `scripts/bench_record.py` or `scripts/bench_diagnose.py`
+- A study is written by `scripts/record/bench_record.py` or `scripts/record/bench_diagnose.py`
   from a commit that contains every script it uses; `env.json` records the
   commit and the hash of each script. Recorded files are not edited afterwards.
   `REPORT.md` and figures are added by hand or by the scripts named in them.

@@ -8,14 +8,14 @@
 # "password-free" from "permitted with a password". These tests feed the parser
 # canned listings, so they need neither root nor any particular sudoers setup.
 #
-# Usage: ./scripts/test_install_bench_env.sh
+# Usage: ./scripts/env/test_install_bench_env.sh
 # =============================================================================
 
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=install_bench_env.sh
-source "$ROOT/scripts/install_bench_env.sh"
+source "$ROOT/scripts/env/install_bench_env.sh"
 set +eu                    # statuses are inspected here; failures must not abort
 
 PASS=0

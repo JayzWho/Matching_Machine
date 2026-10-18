@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Summarize completed diagnostic studies, keeping launches independent.
 
-Usage: python3 scripts/diagnostics/summarize.py STUDY [STUDY ...]
-       python3 scripts/diagnostics/summarize.py --format csv STUDY
+Usage: python3 scripts/report/diagnose_report.py STUDY [STUDY ...]
+       python3 scripts/report/diagnose_report.py --format csv STUDY
 
 Each launch is the median of its recorded repetitions (five by default).
 CV uses sample standard deviation. IQR uses inclusive, linearly interpolated
