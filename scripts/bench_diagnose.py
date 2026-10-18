@@ -367,7 +367,7 @@ def main():
     parser.add_argument("--interference", choices=("cleared", "shared"), default="cleared")
     parser.add_argument("--launch-timeout", type=float, default=300, metavar="SECONDS",
                         help="kill a launch still running after this long and stop the study "
-                             "(default 300); the mutex baseline can hang on a lost wake-up")
+                             "(default 300)")
     parser.add_argument("--allow-unmovable", action="append", default=[], metavar="NAME",
                         help="process name (as in /proc/PID/comm) whose tasks may refuse the cleared "
                              "affinity, such as a service manager holding a capability; recorded per "
