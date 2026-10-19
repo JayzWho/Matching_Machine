@@ -1,0 +1,13 @@
+[
+  {
+    "name": "queues_original",
+    "binary": "bench_spsc_ring_buffer",
+    "filter": "ProducerConsumer"
+  },
+  {
+    "name": "queues_placed",
+    "binary": "build/diagnostics/variance/bench_queue_placement",
+    "filter": "ProducerConsumer",
+    "args": ["--benchmark_min_time=0.2s", "--benchmark_enable_random_interleaving=true"]
+  }
+]
