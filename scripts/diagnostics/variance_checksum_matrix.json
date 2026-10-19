@@ -1,0 +1,12 @@
+[
+  {
+    "name": "original",
+    "binary": "bench_spsc_ring_buffer",
+    "filter": "^BM_SPSC_ProducerConsumer/"
+  },
+  {
+    "name": "checksum_apart",
+    "binary": "build/diagnostics/variance/bench_checksum_apart",
+    "filter": "^BM_SPSC_ProducerConsumer/"
+  }
+]
