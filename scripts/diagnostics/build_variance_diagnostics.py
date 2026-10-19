@@ -408,6 +408,20 @@ def build_counters(root, out, fresh):
     return {("bench_queue_counters_fresh.cpp" if fresh else "bench_queue_counters.cpp"): text}
 
 
+def build_checksum_apart(root, out):
+    """The unchanged queue benchmarks, except that the int64 benchmark's
+    checksum, written by the consumer for every item, gets a cache line of
+    its own. In the Release build it shares one with N, which the producer
+    reads for every item."""
+    text = (root / "benchmarks/bench_spsc_ring_buffer.cpp").read_text()
+    head, body, tail = segment(text, "static void BM_SPSC_ProducerConsumer(",
+                               "BENCHMARK(BM_SPSC_ProducerConsumer)")
+    body = patch(body, '        int64_t sum_consumer = 0;\n',
+                 '        struct alignas(64) DiagLine { int64_t value = 0; } diag_sum;  // DIAG\n'
+                 '        int64_t& sum_consumer = diag_sum.value;  // DIAG\n')
+    return {"bench_checksum_apart.cpp": head + body + tail}
+
+
 def build_split_pipeline(root, out):
     bench = (root / "benchmarks/bench_matching_engine.cpp").read_text()
     bench = patch(bench, '#include "latency_recorder.h"\n',
@@ -663,6 +677,8 @@ def main():
         ("bench_spsc_ring_buffer", lambda r, o: build_counters(r, o, fresh=False), "bench_queue_counters",
          ["benchmarks/bench_spsc_ring_buffer.cpp"]),
         ("bench_spsc_ring_buffer", lambda r, o: build_counters(r, o, fresh=True), "bench_queue_counters_fresh",
+         ["benchmarks/bench_spsc_ring_buffer.cpp"]),
+        ("bench_spsc_ring_buffer", build_checksum_apart, "bench_checksum_apart",
          ["benchmarks/bench_spsc_ring_buffer.cpp"]),
     ]
     metadata = {
