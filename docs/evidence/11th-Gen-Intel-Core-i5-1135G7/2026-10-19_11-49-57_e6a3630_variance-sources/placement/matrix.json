@@ -1,0 +1,21 @@
+[
+  {
+    "name": "queues_original",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/release/bench_spsc_ring_buffer",
+    "filter": "ProducerConsumer",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "queues_placed",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/diagnostics/variance/bench_queue_placement",
+    "filter": "ProducerConsumer",
+    "args": [
+      "--benchmark_min_time=0.2s",
+      "--benchmark_enable_random_interleaving=true"
+    ],
+    "prefix": [],
+    "env": {}
+  }
+]
