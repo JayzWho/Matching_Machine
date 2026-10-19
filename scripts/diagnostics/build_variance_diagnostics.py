@@ -280,6 +280,134 @@ struct CpuTally {
 '''
 
 
+PLACE2_EXTRA = r'''
+// Construct n value-initialized objects at the start of a region.
+template <typename T>
+inline T* construct_array(Kind kind, std::int64_t index, std::int64_t n) {
+    if (index < 0 || index >= kPlacements) std::abort();
+    T* first = static_cast<T*>(g_regions[kind][index]);
+    for (std::int64_t i = 0; i < n; ++i) ::new (static_cast<void*>(first + i)) T();
+    return first;
+}
+
+// Hardware counters over one benchmark call: the main thread and every thread
+// it creates while they are open (inherit), user and kernel. Opened before the
+// timing loop and read after it; reported per item as benchmark counters.
+class Counters {
+public:
+    static constexpr int kCount = 6;
+    Counters() {
+        static const std::uint32_t types[kCount] = {PERF_TYPE_HARDWARE, PERF_TYPE_HARDWARE, PERF_TYPE_RAW,
+                                                    PERF_TYPE_RAW, PERF_TYPE_RAW, PERF_TYPE_RAW};
+        // cycles, instructions, machine_clears.memory_ordering,
+        // mem_load_l3_hit_retired.xsnp_fwd, mem_load_l3_hit_retired.xsnp_no_fwd,
+        // l2_rqsts.all_rfo
+        static const std::uint64_t configs[kCount] = {PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS,
+                                                      0x02c3, 0x04d2, 0x02d2, 0xe224};
+        for (int i = 0; i < kCount; ++i) {
+            perf_event_attr attr{};
+            attr.size = sizeof(attr);
+            attr.type = types[i];
+            attr.config = configs[i];
+            attr.disabled = 1;
+            attr.inherit = 1;
+            attr.read_format = PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING;
+            fd_[i] = static_cast<int>(syscall(SYS_perf_event_open, &attr, 0, -1, -1, 0));
+            if (fd_[i] < 0) error_ = errno;
+        }
+        for (int fd : fd_)
+            if (fd >= 0) ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+    }
+    ~Counters() {
+        for (int fd : fd_)
+            if (fd >= 0) close(fd);
+    }
+    Counters(const Counters&) = delete;
+    Counters& operator=(const Counters&) = delete;
+
+    void report(benchmark::State& state, double items) {
+        for (int fd : fd_)
+            if (fd >= 0) ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+        static const char* const names[kCount] = {"cycles", "instructions", "mo_clears",
+                                                  "xsnp_fwd", "xsnp_no_fwd", "l2_rfo"};
+        double running = 1.0;
+        for (int i = 0; i < kCount; ++i) {
+            std::uint64_t v[3] = {0, 0, 0};
+            if (fd_[i] < 0 || read(fd_[i], v, sizeof(v)) != static_cast<ssize_t>(sizeof(v)) || !v[1] || !v[2])
+                continue;
+            const double share = static_cast<double>(v[2]) / static_cast<double>(v[1]);
+            running = share < running ? share : running;
+            state.counters[names[i]] = static_cast<double>(v[0]) / share / items;
+        }
+        state.counters["counter_running_share"] = running;
+        if (error_) state.counters["counter_errno"] = error_;
+    }
+
+private:
+    int fd_[kCount] = {-1, -1, -1, -1, -1, -1};
+    int error_ = 0;
+};
+'''
+
+
+def place2_header():
+    text = PLACE_HEADER.replace("// Diagnostic placement of queue objects; not part of the benchmarks.",
+                                "// Diagnostic placement of queue objects and hardware counters per call.")
+    text = patch(text, "#include <sys/mman.h>\n",
+                 "#include <sys/mman.h>\n#include <sys/ioctl.h>\n#include <sys/syscall.h>\n"
+                 "#include <unistd.h>\n#include <cerrno>\n#include <linux/perf_event.h>\n")
+    text = patch(text, "enum Kind { kSpsc = 0, kOrder = 1, kMutex = 2, kKinds = 3 };",
+                 "enum Kind { kSpsc = 0, kOrder = 1, kMutex = 2, kOrderSource = 3, kLocals = 4, kKinds = 5 };")
+    text = patch(text, 'inline const char* const kNames[kKinds] = {"spsc", "order", "mutex"};',
+                 'inline const char* const kNames[kKinds] = {"spsc", "order", "mutex", "order_source", "locals"};')
+    return patch(text, "}  // namespace mm_place\n", PLACE2_EXTRA + "\n}  // namespace mm_place\n")
+
+
+def build_counters(root, out, fresh):
+    """The placement program plus hardware counters per call. With fresh, the
+    other memory that a launch fixes once and the transfer touches per item is
+    also drawn per placement: the Order benchmark's source array, and the
+    main-frame variables the consumer writes for every item."""
+    text = build_placement(root, out)["bench_queue_placement.cpp"]
+    text = patch(text, '#include "mm_diag_place.h"  // DIAG\n',
+                 '#include "mm_diag_place2.h"  // DIAG\n#include <span>  // DIAG\n')
+    text = patch(text, '     sizeof(MutexQueueState)});\n',
+                 '     sizeof(MutexQueueState), sizeof(Order) * 10\'000, 64});\n')
+    for name in ("BM_SPSC_ProducerConsumer", "BM_Mutex_ProducerConsumer", "BM_SPSC_Order_ProducerConsumer"):
+        head, body, tail = segment(text, f"static void {name}(", f"BENCHMARK({name})")
+        body = patch(body, '    for (auto _ : state) {\n',
+                     '    mm_place::Counters diag_counters;  // DIAG\n    for (auto _ : state) {\n')
+        body = patch(body, '    diag_tally.report(state);  // DIAG\n',
+                     '    diag_tally.report(state);  // DIAG\n'
+                     '    diag_counters.report(state, static_cast<double>(state.iterations()) * N);  // DIAG\n')
+        if fresh and name == "BM_SPSC_ProducerConsumer":
+            body = patch(body, '        std::atomic<bool> done{false};\n        int64_t sum_consumer = 0;\n',
+                         '        auto& diag_locals = mm_place::construct<IntLocals>(mm_place::kLocals, state.range(1));  // DIAG\n'
+                         '        std::atomic<bool>& done = diag_locals.done;  // DIAG\n'
+                         '        int64_t& sum_consumer = diag_locals.sum_consumer;  // DIAG\n')
+        if fresh and name == "BM_SPSC_Order_ProducerConsumer":
+            body = patch(body, '    std::vector<Order> orders(N);\n',
+                         '    std::span<Order> orders(mm_place::construct_array<Order>(\n'
+                         '        mm_place::kOrderSource, state.range(1), N), static_cast<size_t>(N));  // DIAG\n')
+            body = patch(body, '        int64_t received = 0;\n        int64_t sum = 0;\n',
+                         '        auto& diag_locals = mm_place::construct<OrderLocals>(mm_place::kLocals, state.range(1));  // DIAG\n'
+                         '        int64_t& received = diag_locals.received;  // DIAG\n'
+                         '        int64_t& sum = diag_locals.sum;  // DIAG\n')
+        text = head + body + tail
+    if fresh:
+        text = patch(text, 'struct MutexQueueState {  // DIAG\n',
+                     'struct IntLocals {  // DIAG\n'
+                     '    std::atomic<bool> done{false};\n'
+                     '    int64_t sum_consumer = 0;\n'
+                     '};\n'
+                     'struct OrderLocals {  // DIAG\n'
+                     '    int64_t received = 0;\n'
+                     '    int64_t sum = 0;\n'
+                     '};\n'
+                     'struct MutexQueueState {  // DIAG\n')
+    return {("bench_queue_counters_fresh.cpp" if fresh else "bench_queue_counters.cpp"): text}
+
+
 def build_split_pipeline(root, out):
     bench = (root / "benchmarks/bench_matching_engine.cpp").read_text()
     bench = patch(bench, '#include "latency_recorder.h"\n',
@@ -523,6 +651,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     (out / "mm_diag_split.h").write_text(SPLIT_HEADER)
     (out / "mm_diag_place.h").write_text(PLACE_HEADER)
+    (out / "mm_diag_place2.h").write_text(place2_header())
 
     plans = [
         ("bench_matching_engine", build_split_pipeline, "bench_pipeline_split",
@@ -530,6 +659,10 @@ def main():
         ("bench_baseline_mutex", build_split_mutex, "bench_mutex_split",
          ["benchmarks/bench_baseline_mutex.cpp"]),
         ("bench_spsc_ring_buffer", build_placement, "bench_queue_placement",
+         ["benchmarks/bench_spsc_ring_buffer.cpp"]),
+        ("bench_spsc_ring_buffer", lambda r, o: build_counters(r, o, fresh=False), "bench_queue_counters",
+         ["benchmarks/bench_spsc_ring_buffer.cpp"]),
+        ("bench_spsc_ring_buffer", lambda r, o: build_counters(r, o, fresh=True), "bench_queue_counters_fresh",
          ["benchmarks/bench_spsc_ring_buffer.cpp"]),
     ]
     metadata = {
@@ -544,7 +677,7 @@ def main():
         binary, commands = compile_and_link(build, out, target, list(generated), binary_name)
         metadata["programs"][binary_name] = {
             "inputs": {name: sha256(root / name) for name in inputs},
-            "generated": {name: sha256(out / name) for name in [*generated, "mm_diag_split.h", "mm_diag_place.h"]},
+            "generated": {name: sha256(out / name) for name in [*generated, "mm_diag_split.h", "mm_diag_place.h", "mm_diag_place2.h"]},
             "commands": commands,
             "binary_sha256": sha256(binary),
         }
