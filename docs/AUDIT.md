@@ -246,6 +246,13 @@ Tracked with the same rigour but lower blast radius:
   Release build does not pass `-fno-omit-frame-pointer`.
 - **Thread placement is left to an external `taskset -c 0,1`** with no in-process
   affinity, no SMT sibling awareness, and no `pause` instruction in any spin loop.
+  On the current machine both pipeline workers sometimes start on one CPU, which
+  raises the SPSC latency report's P99 several-fold.
+- **`BM_SPSC_ProducerConsumer` measures false sharing in its own bookkeeping.** The
+  consumer adds every item to a checksum 8 bytes from `N`, on a cache line the
+  producer reads for every item. Moving the checksum to its own line makes the
+  benchmark about five times faster. All three queue benchmarks also place their
+  queue once per process, so a launch measures one memory placement.
 - **No repetitions, warm-up or variability reporting** for the pipeline benchmark that
   produces the headline figures, and the current machine runs with a `powersave`
   governor and turbo enabled.
@@ -299,5 +306,7 @@ phase-4 fix has to be compared over many launches of each version. Two correctio
 to the mutex baseline preceded phase 3: its producer could hang the pipeline by
 setting the completion flag without holding the queue mutex, and its engine object
 is now aligned to a cache line, because the object's address modulo 64 chose between
-two performance levels at every launch. The current control and the conclusions of
-these studies are in [`evidence/README.md`](evidence/README.md).
+two performance levels at every launch. A further study traced the movement that
+remained to a one-time cost in the pipeline's first repetition, to C1 in the latency
+reports, and to the queue benchmarks' bookkeeping and memory placement. The current
+control and the conclusions of these studies are in [`evidence/README.md`](evidence/README.md).
