@@ -1,4 +1,0 @@
-session,block,condition,binary,benchmark,wall_s,cpu_s,cpu_per_wall,waited_ms
-1,1,plain,bench_matching_engine,BM_Pipeline_Throughput/10000/iterations:3,0.055,0.0909,1.6546,4.167
-1,1,plain,bench_matching_engine,BM_Pipeline_Throughput/50000/iterations:3,0.2033,0.3929,1.9331,0.339
-1,1,plain,bench_matching_engine,BM_Pipeline_Throughput/100000/iterations:3,0.4291,0.8389,1.9551,1.438
