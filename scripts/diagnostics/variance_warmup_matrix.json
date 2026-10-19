@@ -1,0 +1,14 @@
+[
+  {
+    "name": "plain",
+    "binary": "bench_matching_engine",
+    "filter": "^BM_Pipeline_Throughput/",
+    "args": ["--benchmark_min_warmup_time=0.00"]
+  },
+  {
+    "name": "warmup",
+    "binary": "bench_matching_engine",
+    "filter": "^BM_Pipeline_Throughput/",
+    "args": ["--benchmark_min_warmup_time=0.01"]
+  }
+]

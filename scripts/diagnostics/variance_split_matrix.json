@@ -1,0 +1,29 @@
+[
+  {
+    "name": "spsc_original",
+    "binary": "bench_matching_engine",
+    "filter": "^BM_"
+  },
+  {
+    "name": "spsc_split",
+    "binary": "build/diagnostics/variance/bench_pipeline_split",
+    "filter": "^BM_",
+    "prefix": ["env", "LD_PRELOAD=/home/jz/projects/personal/Matching_Machine/build/diagnostics/thread_affinity.so", "MM_DIAG_THREAD_CPUS=none", "MM_PAD="]
+  },
+  {
+    "name": "spsc_split_pinned",
+    "binary": "build/diagnostics/variance/bench_pipeline_split",
+    "filter": "^BM_",
+    "prefix": ["env", "LD_PRELOAD=/home/jz/projects/personal/Matching_Machine/build/diagnostics/thread_affinity.so", "MM_DIAG_THREAD_CPUS=1,3", "MM_PAD=x"]
+  },
+  {
+    "name": "mutex_original",
+    "binary": "bench_baseline_mutex",
+    "filter": "^BM_"
+  },
+  {
+    "name": "mutex_split",
+    "binary": "build/diagnostics/variance/bench_mutex_split",
+    "filter": "^BM_"
+  }
+]
