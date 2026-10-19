@@ -1,0 +1,22 @@
+[
+  {
+    "name": "plain",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/release/bench_matching_engine",
+    "filter": "^BM_Pipeline_Throughput/",
+    "args": [
+      "--benchmark_min_warmup_time=0.00"
+    ],
+    "prefix": [],
+    "env": {}
+  },
+  {
+    "name": "warmup",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/release/bench_matching_engine",
+    "filter": "^BM_Pipeline_Throughput/",
+    "args": [
+      "--benchmark_min_warmup_time=0.01"
+    ],
+    "prefix": [],
+    "env": {}
+  }
+]
