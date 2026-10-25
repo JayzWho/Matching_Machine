@@ -1,0 +1,20 @@
+[
+  {
+    "name": "int64",
+    "binary": "build/diagnostics/regimes/bench_queue_regimes",
+    "filter": "BM_SPSC_ProducerConsumer|BM_SPSC_Local_ProducerConsumer|BM_SPSCCached_ProducerConsumer|BM_LineRoundTrip/0/",
+    "args": [
+      "--benchmark_min_time=0.2s",
+      "--benchmark_enable_random_interleaving=true"
+    ]
+  },
+  {
+    "name": "order_mutex",
+    "binary": "build/diagnostics/regimes/bench_queue_regimes",
+    "filter": "BM_SPSC_Order_ProducerConsumer|BM_SPSCCached_Order_ProducerConsumer|BM_Mutex_ProducerConsumer|BM_LineRoundTrip/[13]/",
+    "args": [
+      "--benchmark_min_time=0.2s",
+      "--benchmark_enable_random_interleaving=true"
+    ]
+  }
+]
