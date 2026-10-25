@@ -1,0 +1,24 @@
+[
+  {
+    "name": "int64",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/diagnostics/regimes/bench_queue_regimes",
+    "filter": "BM_SPSC_ProducerConsumer|BM_SPSC_Local_ProducerConsumer|BM_SPSCCached_ProducerConsumer|BM_LineRoundTrip/0/",
+    "args": [
+      "--benchmark_min_time=0.2s",
+      "--benchmark_enable_random_interleaving=true"
+    ],
+    "prefix": [],
+    "env": {}
+  },
+  {
+    "name": "order_mutex",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/diagnostics/regimes/bench_queue_regimes",
+    "filter": "BM_SPSC_Order_ProducerConsumer|BM_SPSCCached_Order_ProducerConsumer|BM_Mutex_ProducerConsumer|BM_LineRoundTrip/[13]/",
+    "args": [
+      "--benchmark_min_time=0.2s",
+      "--benchmark_enable_random_interleaving=true"
+    ],
+    "prefix": [],
+    "env": {}
+  }
+]
