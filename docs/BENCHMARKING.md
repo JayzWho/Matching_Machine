@@ -140,6 +140,26 @@ Because launches differ, a comparison between two versions of the code needs
 several launches of each, and compares their launch medians. The scatter of the
 repetitions inside one launch says nothing about the next launch.
 
+## Results not to compare yet
+
+The [variance-sources study](evidence/README.md) found defects that move these
+results for reasons other than the code under test. Until a pull request fixes
+each, do not compare them between versions of the code:
+
+- **Both latency reports.** They measure how long an order waits in the queue,
+  not how long matching takes (`AUDIT.md`, C1). At the start of a run both SPSC
+  workers can land on one CPU, which raises P99 and P999 several-fold.
+- **The producer-to-consumer benchmarks of `bench_spsc_ring_buffer`.** In
+  `BM_SPSC_ProducerConsumer` the consumer adds every item to a checksum on the
+  cache line of `N`, which the producer reads for every item. All three keep
+  their queue in memory that a launch draws once, and their level depends on
+  that memory; the mutex queue's state is also unaligned.
+
+The pipeline throughput is comparable through launch medians. Its first
+repetition pays a one-time cost, so the scatter inside a launch overstates its
+noise. A warm-up removes the cost only if it runs one call of the benchmark: a
+longer one exhausts the engine's memory pool and hangs.
+
 ## Known limits
 
 - Tasks of other users and kernel threads are not kept off the measurement
