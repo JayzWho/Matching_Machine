@@ -52,6 +52,15 @@ BM_OrderS1, BM_OrderS1C  the Order ring on control page j, retry counts,
              and with hardware counters per thread, started like BM_S1C
 BM_OneWay    one-way handoffs of line 0 or 1 of control page j in one
              direction, in TSC ticks; arguments: page, line, writer CPU
+BM_TimesAsIs, BM_TimesFar   the depth trace with the TSC at each of the
+             consumer's checkpoints and after every 1024 items the producer
+             pushes; as is, and with the producer 40000 items ahead
+BM_S1CFar, BM_S1FwdFar   BM_S1C and BM_S1Fwd with the producer 40000 items
+             ahead, so that a slow cell spends most of the iteration with the
+             producer ahead
+BM_LineRoundTrip  round trips of line 0 or 1 of control page j, as in the
+             queue-regimes study, and of both lines as a one-slot ring with
+             either CPU writing line 1; arguments: page, mode, CPU
 
 Run as root, the program also prints the physical page of every page of the
 memory file and, for lines 0-3 of every control page, the LLC slice that
@@ -84,6 +93,15 @@ producer orientation; it is slow above 20 ns per item.
    which the producer leads and the caught-up remainder, so in slow cells it
    falls as the producer's lead at the start grows (consumer first > as is >
    producer first), while fast cells keep their level.
+Added for the second recording, after the first:
+7. With the producer far ahead, its speed over the consumer's sets the state
+   (first recording: 0.55 in slow cells, 1.33 in fast ones). The side whose
+   median ticks per item in that phase differ by more than 20% between slow
+   and fast cells is the side the control page acts on; the far-state
+   counters show which stall carries the difference.
+8. Round trips of line 0 and line 1, and of the one-slot ring in the cell's
+   orientation, predict the state of at least 90% of cells; one-way handoffs
+   reached 85% in the first recording.
 
 The generated sources, commands and hashes are written beside the binary in
 build/diagnostics/mechanism/. Requires an already built CMake Unix Makefiles
@@ -647,9 +665,16 @@ struct Probe {
 };
 
 enum Start { kAsIs, kProducerFirst, kConsumerFirst };
-inline constexpr std::int64_t kHeadStart = 16384;
-inline constexpr std::int64_t kTraceEvery = 1000;
+inline constexpr std::int64_t kTraceEvery = 1000;    // consumer checkpoints, in items
+inline constexpr std::int64_t kProducerEvery = 1024;  // producer checkpoints, in items
 inline constexpr int kTracePoints = 128;
+
+inline std::uint64_t now() noexcept {
+    unsigned aux;
+    const std::uint64_t t = __rdtscp(&aux);
+    _mm_lfence();
+    return t;
+}
 
 struct alignas(64) PaddedInt {
     std::int64_t v;
@@ -663,8 +688,10 @@ struct Variant {
     static constexpr bool kCounters = false;
     static constexpr bool kSampling = false;
     static constexpr bool kTrace = false;
+    static constexpr bool kTimes = false;  // TSC at the trace's checkpoints, and at the producer's
     static constexpr bool kHist = false;
     static constexpr Start kStart = kAsIs;
+    static constexpr std::int64_t kLead = 16384;  // items the producer pushes first, for kProducerFirst
     static constexpr int kLag = -1;  // -1 the original ring; -2 the lag ring at depth >= 1; K >= 0 lines
     using Item = std::int64_t;
     template <std::size_t C>
@@ -697,6 +724,23 @@ struct S1Fwd : Variant {
 struct TraceAsIs : Variant { static constexpr bool kTrace = true; };
 struct TraceProducerFirst : TraceAsIs { static constexpr Start kStart = kProducerFirst; };
 struct TraceConsumerFirst : TraceAsIs { static constexpr Start kStart = kConsumerFirst; };
+// The producer far ahead: 40000 items before the consumer may pop. A slow
+// cell's consumer then needs most of the iteration to catch up.
+struct TimesAsIs : TraceAsIs { static constexpr bool kTimes = true; };
+struct TimesFar : TimesAsIs {
+    static constexpr Start kStart = kProducerFirst;
+    static constexpr std::int64_t kLead = 40000;
+};
+struct S1CFar : Variant {
+    static constexpr bool kCounters = true;
+    static constexpr Start kStart = kProducerFirst;
+    static constexpr std::int64_t kLead = 40000;
+};
+struct S1FwdFar : Variant {
+    static constexpr bool kSampling = true;
+    static constexpr Start kStart = kProducerFirst;
+    static constexpr std::int64_t kLead = 40000;
+};
 struct Hist : Variant { static constexpr bool kHist = true; };
 template <int K>
 struct Lag : Variant {
@@ -738,6 +782,8 @@ struct Hot {
     Probe probe;
     std::int64_t next = 1;            // trace: the item count to record the depth at next
     std::int32_t* trace = nullptr;    // trace: depth before item 1, then after every kTraceEvery items
+    std::int64_t* times = nullptr;    // times: TSC at the same checkpoints, from the iteration's origin
+    std::uint64_t origin = 0;
     std::int64_t base = 0;            // hist: ring index of this iteration's first item
     std::int64_t mask = 0;
     std::int64_t hist[6] = {};        // hist: depth 1-7, 8-63, 64-511, >= 512; producer on the line; samples
@@ -747,6 +793,7 @@ struct Hot {
         if constexpr (V::kTrace) {
             if (received == next) [[unlikely]] {
                 trace[received / kTraceEvery] = static_cast<std::int32_t>(buf.size()) + (received == 1);
+                if constexpr (V::kTimes) times[received / kTraceEvery] = static_cast<std::int64_t>(now() - origin);
                 next = received == 1 ? kTraceEvery : next + kTraceEvery;
             }
         }
@@ -783,6 +830,10 @@ public:
     Hot<V> hot() {
         Hot<V> h;
         if constexpr (V::kTrace) h.trace = run_.traces.back().data();
+        if constexpr (V::kTimes) {
+            h.times = run_.consumer_times.back().data();
+            h.origin = run_.origin;
+        }
         if constexpr (V::kHist) {
             h.base = run_.base_head;
             h.mask = static_cast<std::int64_t>(run_.mask);
@@ -830,6 +881,10 @@ struct Run {
         if constexpr (V::kCounters) producer_counters_.open();
         if constexpr (V::kSampling) producer_sampler_.open();
         if constexpr (V::kTrace) traces.reserve(64);
+        if constexpr (V::kTimes) {
+            consumer_times.reserve(64);
+            producer_times.reserve(64);
+        }
         key_ = state.name() + "/" + std::to_string(n) + "/" + std::to_string(index) + "/" + std::to_string(orientation);
         call = calls()[key_]++;
     }
@@ -860,6 +915,13 @@ struct Run {
         if constexpr (V::kLag != -1) buf.diag_release(false);
         base_head = (iterations * n) & static_cast<std::int64_t>(mask);
         if constexpr (V::kTrace) traces.emplace_back();
+        if constexpr (V::kTimes) {
+            consumer_times.emplace_back();
+            consumer_times.back().fill(-1);
+            producer_times.emplace_back();
+            producer_times.back().fill(-1);
+            origin = now();
+        }
     }
     ConsumerSide<V> consumer_side() { return ConsumerSide<V>(*this); }
 
@@ -870,10 +932,12 @@ struct Run {
         if constexpr (V::kStart == kConsumerFirst)
             while (!ready.load(std::memory_order_acquire)) {}
         if constexpr (V::kStart == kProducerFirst) {
-            for (std::int64_t i = 0; i < kHeadStart; ++i)
+            for (std::int64_t i = 0; i < V::kLead; ++i) {
                 while (!buf.try_push(V::item(i))) {}
+                pushed(i);
+            }
             release.store(1, std::memory_order_release);
-            first = kHeadStart;
+            first = V::kLead;
         }
         if constexpr (V::kCounters) producer_counters_.start();
         if constexpr (V::kSampling) producer_sampler_.start();
@@ -881,6 +945,12 @@ struct Run {
     }
     void push_failed(std::int64_t i) noexcept {
         if constexpr (V::kProbes) push.fail(i);
+    }
+    void pushed(std::int64_t i) noexcept {
+        if constexpr (V::kTimes) {
+            if (((i + 1) & (kProducerEvery - 1)) == 0) [[unlikely]]
+                producer_times.back()[(i + 1) / kProducerEvery] = static_cast<std::int64_t>(now() - origin);
+        }
     }
     template <class Ring>
     void producer_end(Ring& buf) {
@@ -954,6 +1024,14 @@ struct Run {
                                    std::to_string(k) + " producer_cpu=" + std::to_string(producer_cpu) + " depths=";
                 for (std::int64_t p = 0; p <= n / kTraceEvery && p < kTracePoints; ++p)
                     line += (p ? "," : "") + std::to_string(traces[k][p]);
+                if constexpr (V::kTimes) {
+                    line += " consumer_ticks=";
+                    for (std::int64_t p = 0; p <= n / kTraceEvery && p < kTracePoints; ++p)
+                        line += (p ? "," : "") + std::to_string(consumer_times[k][p]);
+                    line += " producer_ticks=";
+                    for (std::int64_t p = 1; p <= n / kProducerEvery && p < kTracePoints; ++p)
+                        line += (p > 1 ? "," : "") + std::to_string(producer_times[k][p]);
+                }
                 std::fprintf(stderr, "%s\n", line.c_str());
             }
         }
@@ -976,6 +1054,8 @@ struct Run {
     double pop_fails = 0, pop_waits = 0, push_fails = 0, push_waits = 0, depth_end = 0, start_depth = 0, misplaced = 0;
     double hist[6] = {};
     std::vector<std::array<std::int32_t, kTracePoints>> traces;
+    std::vector<std::array<std::int64_t, kTracePoints>> consumer_times, producer_times;
+    std::uint64_t origin = 0;
     ThreadCounters producer_counters_;
     FwdSampler producer_sampler_;
     CounterTotals producer_counters, consumer_counters;
@@ -1063,6 +1143,59 @@ static void BM_OneWay(benchmark::State& state) {
 }
 BENCHMARK(BM_OneWay)
     ->ArgsProduct({benchmark::CreateDenseRange(0, mm_mech::kWide - 1, 1), {0, 1}, {0, 1}})
+    ->Iterations(3)
+    ->UseManualTime();
+
+// Round trips as in the queue-regimes study: thread A writes 2k+1 and waits
+// for 2k+2, thread B waits for 2k+1 and writes 2k+2. Mode 0 or 1 uses line 0
+// (head_) or line 1 (tail_) of control page j, written by both threads in
+// turn; mode 3 uses both lines as a one-slot ring: A writes line 1 and waits
+// on line 0, B waits on line 1 and writes line 0. Arguments: page, mode, the
+// CPU of A (0 the lower, 1 the higher). The time per item is one round trip.
+inline constexpr std::uint64_t kRoundTrips = 5000;
+
+static void BM_LineRoundTrip(benchmark::State& state) {
+    std::byte* const base = mm_mech::g_ring[mm_mech::kComposite][state.range(0)];
+    const std::int64_t mode = state.range(1);
+    auto* const a_line = reinterpret_cast<std::atomic<std::uint64_t>*>(base + 64 * (mode == 3 ? 1 : mode));
+    auto* const b_line = reinterpret_cast<std::atomic<std::uint64_t>*>(base + 64 * (mode == 3 ? 0 : mode));
+    const auto cpus = mm_mech::launch_cpus();
+    const int a_cpu = cpus[state.range(2)], b_cpu = cpus[1 - state.range(2)];
+    for (auto _ : state) {
+        a_line->store(0, std::memory_order_relaxed);
+        b_line->store(0, std::memory_order_relaxed);
+        std::atomic<int> ready{0};
+        double seconds = 0;
+        mm_mech::Thread b(b_cpu, [&] {
+            ready.fetch_add(1);
+            while (ready.load() < 2) {}
+            for (std::uint64_t k = 0; k < kRoundTrips; ++k) {
+                while (a_line->load(std::memory_order_acquire) != 2 * k + 1) {}
+                b_line->store(2 * k + 2, std::memory_order_release);
+            }
+        });
+        mm_mech::Thread a(a_cpu, [&] {
+            ready.fetch_add(1);
+            while (ready.load() < 2) {}
+            const auto start = std::chrono::steady_clock::now();
+            for (std::uint64_t k = 0; k < kRoundTrips; ++k) {
+                a_line->store(2 * k + 1, std::memory_order_release);
+                while (b_line->load(std::memory_order_acquire) != 2 * k + 2) {}
+            }
+            seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        });
+        a.join();
+        b.join();
+        state.SetIterationTime(seconds);
+    }
+    state.SetItemsProcessed(static_cast<std::int64_t>(state.iterations() * kRoundTrips));
+}
+BENCHMARK(BM_LineRoundTrip)
+    ->ArgsProduct({benchmark::CreateDenseRange(0, mm_mech::kWide - 1, 1), {0, 1}, {0}})
+    ->Iterations(3)
+    ->UseManualTime();
+BENCHMARK(BM_LineRoundTrip)
+    ->ArgsProduct({benchmark::CreateDenseRange(0, mm_mech::kWide - 1, 1), {3}, {0, 1}})
     ->Iterations(3)
     ->UseManualTime();
 '''
@@ -1159,6 +1292,7 @@ def int_family(body, plain):
         body = patch(body, push_loop,
                      "        for (int64_t i = diag_run.producer_start(buf); i < N; ++i) {  // DIAG\n"
                      "            while (!buf.try_push(V::item(i))) [[unlikely]] { diag_run.push_failed(i); }  // DIAG\n"
+                     "            diag_run.pushed(i);  // DIAG\n"
                      "        }\n"
                      "        diag_run.producer_end(buf);  // DIAG\n")
     body = patch(body, "        consumer.join();\n", "        consumer.join();\n        diag_run.end();  // DIAG\n")
@@ -1235,6 +1369,10 @@ INT_VARIANTS = (
     ("BM_DataSwap", "BM_SPSC_ProducerConsumer", "DataSwap", "kMain"),
     ("BM_Alias", "BM_SPSC_ProducerConsumer", "Alias", "kMain"),
     ("BM_Anon", "BM_SPSC_ProducerConsumer", "Anon", "kMain"),
+    ("BM_TimesAsIs", "BM_SPSC_ProducerConsumer", "TimesAsIs", "kMain"),
+    ("BM_TimesFar", "BM_SPSC_ProducerConsumer", "TimesFar", "kMain"),
+    ("BM_S1CFar", "BM_SPSC_ProducerConsumer", "S1CFar", "kMain"),
+    ("BM_S1FwdFar", "BM_SPSC_ProducerConsumer", "S1FwdFar", "kMain"),
 )
 ORDER_VARIANTS = (("BM_OrderS1", "OrderS1"), ("BM_OrderS1C", "OrderS1C"))
 
