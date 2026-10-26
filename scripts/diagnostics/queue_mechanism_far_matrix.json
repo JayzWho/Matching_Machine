@@ -1,0 +1,8 @@
+[
+  {
+    "name": "far",
+    "binary": "build/diagnostics/mechanism/bench_queue_mechanism",
+    "filter": "^BM_(S1|TimesAsIs|TimesFar|S1CFar|S1FwdFar|OneWay|LineRoundTrip)/",
+    "args": ["--benchmark_enable_random_interleaving=true"]
+  }
+]
