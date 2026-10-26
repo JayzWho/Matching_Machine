@@ -1,0 +1,15 @@
+{
+  "cores": [
+    3,
+    1
+  ],
+  "tasks_seen": 778,
+  "tasks_moved": 777,
+  "tasks_refused": 1,
+  "refusing": [
+    "systemd"
+  ],
+  "command": "sudo taskset -c 1,3 /home/jz/projects/personal/Matching_Machine/build/diagnostics/mechanism/bench_queue_mechanism '--benchmark_filter=^BM_(S1|OneWay|LineRoundTrip|TimesFar)/' --benchmark_repetitions=3 --benchmark_enable_random_interleaving=true --benchmark_out_format=json --benchmark_out=/home/jz/projects/personal/Matching_Machine/docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-26_14-22-29_ed8444a_queue-mechanism-root/root.json > /home/jz/projects/personal/Matching_Machine/docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-26_14-22-29_ed8444a_queue-mechanism-root/root.log 2>&1",
+  "binary_sha256": "f04a3c0d859d2b96c5bb61a8addcdc1147666d6072b3a8175eb5e4b4c3b937f9",
+  "git_commit": "ed8444ab165a3338823353e9a15a793a1e767c32"
+}
