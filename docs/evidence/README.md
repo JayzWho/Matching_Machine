@@ -17,8 +17,9 @@ compared as if a code change separated them.
 
 The current control and the workflow build on these results. The records of
 the first two are kept at the tag `archive/pre-cleanup-2026-10`, those of the
-third at `archive/variance-sources-2026-10` and those of the fourth at
-`archive/queue-regimes-2026-10`.
+third at `archive/variance-sources-2026-10`, those of the fourth at
+`archive/queue-regimes-2026-10` and those of the fifth at
+`archive/queue-mechanism-2026-10`.
 
 - **Repeatability, 2026-10-12.** 32 launches of each unchanged binary in four
   sessions. Nothing drifted between sessions or over time, but results moved
@@ -56,10 +57,22 @@ third at `archive/variance-sources-2026-10` and those of the fourth at
   and the two choose it together: a region can be slow only when the cache line
   of `head_` takes longer to move between the CPUs than the line of `tail_`,
   and then with the producer on only one of the CPUs. Which property of a
-  physical address sets that cost is not resolved. A ring whose sides cache
-  the other side's index was caught up in every region, at about 42 ns per
-  item. The Order ring and the mutex queue slow down with how often their
-  consumer waits. [Report](https://github.com/JayzWho/Matching_Machine/blob/archive/queue-regimes-2026-10/docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-25_18-13-29_a03ed6c_queue-regimes/REPORT.md)
+  physical address sets that cost is not resolved; the next study resolves it.
+  A ring whose sides cache the other side's index was caught up in every
+  region, at about 42 ns per item. The Order ring and the mutex queue slow
+  down with how often their consumer waits. [Report](https://github.com/JayzWho/Matching_Machine/blob/archive/queue-regimes-2026-10/docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-25_18-13-29_a03ed6c_queue-regimes/REPORT.md)
+- **Queue mechanism, 2026-10-26.** Two recordings and one launch as root asked
+  why the int64 ring's caught-up state is slow and what selects it. Caught up,
+  the consumer reads the cache line the producer is still writing: keeping the
+  consumer one line behind removes 64% of the gap to the fast level, four lines
+  91%. Each region in each orientation has one stable state, which no start of
+  an iteration changes: the side that is faster while the producer is far ahead
+  wins. The slice of the last-level cache that serves `tail_` decides which
+  side that is: the ring is slow exactly when `tail_` is in the slice of the
+  producer's CPU. That holds for one region in four per orientation and, since
+  `head_` and `tail_` always fall in a pair of slices, never in both
+  orientations. The same placement makes the Order ring about 19% slower.
+  [Report](https://github.com/JayzWho/Matching_Machine/blob/archive/queue-mechanism-2026-10/docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-26_13-58-27_bad47d0_queue-mechanism/REPORT.md)
 
 ## Layout
 
@@ -98,6 +111,7 @@ one subdirectory with the files above per recording.
 | `archive/pre-cleanup-2026-10` | The two completed studies above with their reports; the tools only the launch-variance study used (object-placement build, GDB script, plot, hardware-counter summary, condition matrices); and material from the cloud VM period: `scripts/run_perf.sh`, `docs/build_commands.md`, `docs/optimization_log.md`, `docs/snapshots/` and `learning_notes/` | The studies are answered and their conclusions are listed above. The VM-period material describes withdrawn measurements or a workflow that is no longer used |
 | `archive/variance-sources-2026-10` | The variance-sources study: six recordings and their report, the script that builds its diagnostic programs, and the condition matrices | The study is answered and its conclusions are listed above. The fixes it calls for are made in their own pull requests |
 | `archive/queue-regimes-2026-10` | The queue-regimes study: one recording and its report, the script that builds its diagnostic program, the condition matrix and the script that prints its tables | The study is answered and its conclusions are listed above. The fixes it calls for are made in their own pull requests |
+| `archive/queue-mechanism-2026-10` | The queue-mechanism study: two recordings and one launch as root with their report, the script that builds its diagnostic program, the two condition matrices, the helper that holds measurement mode for the root launch, and the script that prints its tables | The study is answered and its conclusions are listed above. The fixes it calls for are made in their own pull requests |
 | `archive/control-runs-2026-10` | Three recordings of the unfixed benchmarks with one launch per binary each (2026-09-22 and twice on 2026-10-07), their comparison as `REPRODUCIBILITY.md`, and the scripts that produced them | Three single launches cannot tell movement between launches from movement between sessions or boots. Replaced by the repeatability study |
 | `archive/launch-variance-first-recording` | The first recording of the launch-variance studies with its tool snapshots, summaries, plots and one preflight that stopped before measuring, and its report `docs/LAUNCH_VARIANCE.md` | Recorded with tools that were not yet committed, in the shared condition only, while a VirtualBox VM was running. Replaced by the launch-variance study |
 | `archive/mutex-lost-wakeup` | A stress program that runs the mutex pipeline back to back until it hangs, and a recording of the pipeline's throughput before and after the hang was fixed | Both served the fix of the mutex baseline's hang, which is complete. The fix changed throughput by less than the variation between launches |
