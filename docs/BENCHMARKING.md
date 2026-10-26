@@ -157,10 +157,12 @@ each, do not compare them between versions of the code:
   queue's state is also unaligned. Without the shared checksum, the int64 ring
   has two levels, 8 to 9 and about 60 ns per item. They are two states of the
   transfer: in the slower one the consumer has caught up with the producer and
-  waits for it before about one item in twelve. A region of memory can put the
-  ring in the slower state only when the cache line of `head_` takes longer to
-  move between the CPUs than the line of `tail_`, and then with the producer on
-  only one of the two CPUs. The fix keeps both states as a result: it pins the
+  waits for it before about one item in twelve, reading the cache line the
+  producer is still writing. The ring is in the slower state exactly when the
+  slice of the last-level cache that serves `tail_` is the slice of the
+  producer's CPU. The physical address of the queue sets the slice, so in each
+  assignment of the threads to the CPUs one fresh region in four is slow, and
+  no region is slow in both. The fix keeps both states as a result: it pins the
   threads, measures both assignments of them to the CPUs on many fresh memory
   regions per launch, and reports the level of each state and the share of slow
   measurements. The Order ring and the mutex queue have no such levels; they are
