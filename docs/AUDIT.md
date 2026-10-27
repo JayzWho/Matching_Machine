@@ -253,6 +253,18 @@ Tracked with the same rigour but lower blast radius:
   producer reads for every item. Moving the checksum to its own line makes the
   benchmark about five times faster. All three queue benchmarks also place their
   queue once per process, so a launch measures one memory placement.
+- **The producer-to-consumer benchmarks leave the state they measure to chance.**
+  Under their symmetric full-speed load, the int64 ring runs in one of two
+  states: the producer stays ahead, at 8 to 9 ns per item, or the consumer
+  catches up and from then on waits for the producer before about one item in
+  twelve, at about 60 ns. Caught up, the consumer reads the cache line the
+  producer is still writing, which makes each item about seven times as
+  expensive. The ring is in that state exactly when the slice of the last-level
+  cache that serves `tail_` is the slice of the producer's CPU: the memory the
+  queue lands in sets the slice, the scheduler sets the CPU, and the benchmark
+  controls neither. The Order ring and the mutex queue stay close to the
+  caught-up state and slow down continuously with how often their consumer
+  waits, which the same two choices set.
 - **No repetitions, warm-up or variability reporting** for the pipeline benchmark that
   produces the headline figures, and the current machine runs with a `powersave`
   governor and turbo enabled.
