@@ -9,7 +9,8 @@ cases, and counts how often the test marks the benchmark as moving between
 launches. The test must stay quiet when the launches do not differ and must
 find both a gradual difference and a benchmark that settles on one of two
 levels at each launch. Also checks that rows marked as a warm-up are left out,
-and that rows of studies recorded before the mark existed all count.
+and that rows of studies recorded before the mark existed all count, and that
+the latency table states the calibrated TSC frequency when a study has one.
 """
 import random
 import sys
@@ -35,11 +36,21 @@ def warmup_rows_left_out():
     return (bench_report.counted(marked) == marked[1:] and bench_report.counted(unmarked) == unmarked)
 
 
+def tsc_frequency_stated():
+    def env(*ghz):
+        return {"sessions": [{"before": {"tsc": {"calibration": {"ghz": g}}}} for g in ghz]}
+    stated = bench_report.unit_note(env(2.419182, 2.419183))
+    return ("2.419182 to 2.419183 GHz (2 calibrations" in stated
+            and "has not been calibrated" in bench_report.unit_note({"sessions": [{"before": {}}]}))
+
+
 def main():
     gen, failed = random.Random(1), False
-    ok = warmup_rows_left_out()
-    failed |= not ok
-    print(f"{'ok  ' if ok else 'FAIL'} warm-up rows left out, unmarked rows counted")
+    for name, check in (("warm-up rows left out, unmarked rows counted", warmup_rows_left_out),
+                        ("calibrated TSC frequency stated", tsc_frequency_stated)):
+        ok = check()
+        failed |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} {name}")
     for name, factor, threshold, allowed in CASES:
         marks = 0
         for trial in range(TRIALS):

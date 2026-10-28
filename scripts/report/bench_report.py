@@ -85,6 +85,17 @@ def read(path):
         return list(csv.DictReader(fh))
 
 
+def unit_note(env):
+    """What the study knows about the counter's frequency."""
+    found = [s[when].get("tsc", {}).get("calibration") or {} for s in env["sessions"] for when in ("before", "after")
+             if when in s]
+    ghz = [c["ghz"] for c in found if c.get("ghz")]
+    if not ghz:
+        return "not converted to time because the counter's frequency has not been calibrated."
+    return (f"not converted to time. Calibrated against CLOCK_MONOTONIC before and after each session, the "
+            f"counter ran at {min(ghz):.6f} to {max(ghz):.6f} GHz ({len(ghz)} calibrations, env.json).")
+
+
 def counted(rows):
     """The rows not marked as a warm-up. Studies recorded before the mark
     existed have no `warmup` column, and all of their rows count."""
@@ -507,10 +518,9 @@ def main():
         rows.append([c, pipeline, percentile, f"{median(meds):,.0f}", f"{min(meds):,.0f}", f"{max(meds):,.0f}",
                      pct(spread(meds)), f"{inside:.1f}×"])
     out += ["## Pipeline latency at 100,000 orders", "",
-            "In TSC ticks, the unit of the processor's timestamp counter; not converted to time because the "
-            "counter's frequency has not been calibrated. Each launch prints one report per repetition; a "
-            "launch is represented by the median of its reports"
-            + (", leaving out the warm-up's." if d.get("warmup_repetitions") else "."), ""]
+            "In TSC ticks, the unit of the processor's timestamp counter; " + unit_note(env)
+            + " Each launch prints one report per repetition; a launch is represented by the median of its "
+            "reports" + (", leaving out the warm-up's." if d.get("warmup_repetitions") else "."), ""]
     out += table(["Condition", "Pipeline", "Percentile", "Median of launches", "Lowest launch", "Highest launch",
                   "Spread of launch medians", "Highest / lowest report inside a launch, median"], rows, right_from=3)
 

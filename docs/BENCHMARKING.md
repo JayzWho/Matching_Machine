@@ -46,7 +46,8 @@ script it tests, and `ctest` runs all of them (`ctest -L scripts` only those).
 |---|---|---|
 | `env/bench_env.sh` | for `setup` and `restore` | Enters and leaves measurement mode: frequency pinned at base with turbo off, SMT siblings offline, movable device interrupts steered to the other cores, `perf_event_paranoid` lowered. `status`, `cores` and `throttle` need no root |
 | `env/install_bench_env.sh` | once | Installs a root-owned copy of `bench_env.sh` at `/usr/local/sbin/mm-bench-env`, so that one sudoers rule can allow `setup` and `restore` without a password. `--pin` fixes the measurement cores, `--check` verifies the installation |
-| `env/capture_env.sh` | no | Writes a JSON record of the commit, toolchain, build flags, CPU, frequency policy, thermal state and measurement cores |
+| `env/capture_env.sh` | no | Writes a JSON record of the commit, toolchain, build flags, CPU, frequency policy, TSC frequency, thermal state and measurement cores |
+| `env/tsc_calibrate.cpp` | no | Built with the benchmarks. Measures the TSC frequency against `CLOCK_MONOTONIC` for `capture_env.sh` |
 | `record/bench_record.py` | no | Records a study of the four binaries. Enters and leaves measurement mode itself through the sudoers rule |
 | `record/bench_diagnose.py` | no | Records a rotating matrix of focused diagnostic conditions, entering and restoring measurement mode itself |
 | `report/bench_report.py` | no | Turns a study directory into Markdown tables |
@@ -182,9 +183,10 @@ pool and hangs.
   cores. Doing so needs a cpuset set up by `bench_env.sh setup`.
 - The two threads of a two-threaded benchmark are placed by the scheduler
   within the two measurement cores; the benchmark code does not pin them.
-- Latency is reported in ticks of the processor's timestamp counter (TSC). The
-  counter's frequency has not been calibrated, so ticks are not converted to
-  time.
+- Latency is reported in ticks of the processor's timestamp counter (TSC).
+  `capture_env.sh` measures the counter's frequency against `CLOCK_MONOTONIC`
+  before and after every session and records it in `env.json` under `tsc`;
+  the reports do not convert ticks to time yet.
 - The timer tick, softirqs and per-CPU kernel threads stay on the measurement
   cores. Removing them needs kernel boot parameters.
 - A study covers one boot. Whether results move across reboots or kernel
