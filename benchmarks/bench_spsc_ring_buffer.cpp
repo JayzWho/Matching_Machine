@@ -75,16 +75,20 @@ static void BM_SPSC_ProducerConsumer(benchmark::State& state) {
         std::atomic<bool> done{false};
         int64_t sum_consumer = 0;
 
-        // 消费者线程
-        std::thread consumer([&] {
+        // 消费者线程。N 按值捕获，校验和在局部变量里累加、结束时只写一次：
+        // 生产者每项都读的变量若与消费者每项都写的变量共用一个缓存行，
+        // 测到的就是这一行在两个核之间来回搬运（伪共享），而不是队列本身
+        std::thread consumer([&buf, &done, &sum_consumer, N] {
             int64_t received = 0;
             int64_t val;
+            int64_t sum = 0;
             while (received < N) {
                 if (buf.try_pop(val)) {
-                    sum_consumer += val;
+                    sum += val;
                     ++received;
                 }
             }
+            sum_consumer = sum;
             done.store(true, std::memory_order_release);
         });
 
@@ -110,34 +114,45 @@ BENCHMARK(BM_SPSC_ProducerConsumer)
 // ── 4. 双线程 Mutex 版本（对比基准） ─────────────────────────────────────────
 // 与 BM_SPSC_ProducerConsumer 逻辑完全相同，仅通信机制换成 mutex+queue。
 // 对比两者数据，直观展示 lock-free 的性能优势。
+
+// 两个线程共用的状态放在一个从缓存行开头开始的结构里。散放在栈上时，它们落在
+// 缓存行里的什么位置随每次启动的栈地址而变，成绩跟着变（与 bench_baseline_mutex.cpp
+// 里的引擎对象相同）
+struct alignas(64) MutexQueue {
+    std::queue<int64_t> q;
+    std::mutex mtx;
+    std::atomic<bool> producer_done{false};
+};
+
 static void BM_Mutex_ProducerConsumer(benchmark::State& state) {
     const int64_t N = state.range(0);
 
     for (auto _ : state) {
-        std::queue<int64_t> q;
-        std::mutex mtx;
-        std::atomic<bool> producer_done{false};
+        MutexQueue shared;
         int64_t sum_consumer = 0;
 
-        std::thread consumer([&] {
+        // 与 BM_SPSC_ProducerConsumer 相同：N 按值捕获，校验和在局部变量里累加
+        std::thread consumer([&shared, &sum_consumer, N] {
             int64_t received = 0;
+            int64_t sum = 0;
             while (received < N) {
-                std::unique_lock<std::mutex> lk(mtx);
-                if (!q.empty()) {
-                    sum_consumer += q.front();
-                    q.pop();
+                std::unique_lock<std::mutex> lk(shared.mtx);
+                if (!shared.q.empty()) {
+                    sum += shared.q.front();
+                    shared.q.pop();
                     ++received;
                     lk.unlock();
                 }
                 // else: 释放锁，让生产者继续 push
             }
+            sum_consumer = sum;
         });
 
         for (int64_t i = 0; i < N; ++i) {
-            std::lock_guard<std::mutex> lk(mtx);
-            q.push(i);
+            std::lock_guard<std::mutex> lk(shared.mtx);
+            shared.q.push(i);
         }
-        producer_done.store(true);
+        shared.producer_done.store(true);
 
         consumer.join();
         benchmark::DoNotOptimize(sum_consumer);
@@ -174,17 +189,20 @@ static void BM_SPSC_Order_ProducerConsumer(benchmark::State& state) {
     }
 
     for (auto _ : state) {
-        int64_t received = 0;
         int64_t sum = 0;
 
-        std::thread consumer([&] {
+        // 与 BM_SPSC_ProducerConsumer 相同：计数和校验和留在消费者的局部变量里
+        std::thread consumer([&buf, &sum, N] {
             Order o{};
+            int64_t received = 0;
+            int64_t local_sum = 0;
             while (received < N) {
                 if (buf.try_pop(o)) {
-                    sum += o.price;  // 防止被优化掉
+                    local_sum += o.price;  // 防止被优化掉
                     ++received;
                 }
             }
+            sum = local_sum;
         });
 
         for (int64_t i = 0; i < N; ++i) {
