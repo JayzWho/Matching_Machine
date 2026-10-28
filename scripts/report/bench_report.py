@@ -67,6 +67,8 @@ FAMILIES = [
      lambda b, n: n.startswith("BM_MutexPipeline_Throughput")),
 ]
 PIPELINES = {"bench_matching_engine": "SPSC pipeline", "bench_baseline_mutex": "Mutex pipeline"}
+# Names as recorded before the pipeline throughput benchmarks reported real
+# time; since then Google Benchmark appends "/real_time" to them (base_name()).
 RATIO = (("bench_matching_engine", "BM_Pipeline_Throughput/100000/iterations:3"),
          ("bench_baseline_mutex", "BM_MutexPipeline_Throughput/100000/iterations:3"))
 # The benchmarks whose launch medians are listed round by round.
@@ -83,6 +85,29 @@ PLAIN = ("temp_start_c", "temp_end_c", "position", "cpu_per_wall")
 def read(path):
     with open(path, newline="") as fh:
         return list(csv.DictReader(fh))
+
+
+def base_name(name):
+    """A pipeline throughput benchmark's name without the suffix that real time added."""
+    stem = name.removesuffix("/real_time")
+    return stem if stem.startswith(("BM_Pipeline_Throughput/", "BM_MutexPipeline_Throughput/")) else name
+
+
+def unit_note(env):
+    """What the study knows about the counter's frequency."""
+    found = [s[when].get("tsc", {}).get("calibration") or {} for s in env["sessions"] for when in ("before", "after")
+             if when in s]
+    ghz = [c["ghz"] for c in found if c.get("ghz")]
+    if not ghz:
+        return "not converted to time because the counter's frequency has not been calibrated."
+    return (f"not converted to time. Calibrated against CLOCK_MONOTONIC before and after each session, the "
+            f"counter ran at {min(ghz):.6f} to {max(ghz):.6f} GHz ({len(ghz)} calibrations, env.json).")
+
+
+def counted(rows):
+    """The rows not marked as a warm-up. Studies recorded before the mark
+    existed have no `warmup` column, and all of their rows count."""
+    return [row for row in rows if not int(row.get("warmup") or 0)]
 
 
 def median(values):
@@ -239,7 +264,7 @@ def main():
 
     # reps[condition][(binary, benchmark)][(session, round)] = [real ns per repetition]
     reps = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    for row in read(opts.study / "samples.csv"):
+    for row in counted(read(opts.study / "samples.csv")):
         reps[row["condition"]][(row["binary"], row["benchmark"])][(int(row["session"]), int(row["round"]))] \
             .append(float(row["real_time_ns"]))
     launch_row = {(l["condition"], l["binary"], int(l["session"]), int(l["round"])): l for l in launches}
@@ -266,7 +291,9 @@ def main():
         ["Kernel", first["before"]["os"]["kernel"]],
         ["Measurement cores", ", ".join(map(str, first["cores"])) + f" (single-threaded binaries on {first['cores'][0]})"],
         ["Recorded", f"{launches[0]['started'][:16].replace('T', ' ')} to {launches[-1]['started'][11:16]}"],
-        ["Sessions × rounds × repetitions", f"{d['sessions']} × {d['rounds_per_session']} × {d['repetitions']}"],
+        ["Sessions × rounds × repetitions", f"{d['sessions']} × {d['rounds_per_session']} × {d['repetitions']}"
+         + (f", the first {d['warmup_repetitions']} of each benchmark a warm-up, left out"
+            if d.get("warmup_repetitions") else "")],
         ["Launches of each binary", ", ".join(f"{v} {c}" for c, v in per_condition.items())],
         ["Binaries built", ", ".join(sorted({v[:10] for v in env["binaries_built"].values()}))],
     ], right_from=2)
@@ -366,12 +393,12 @@ def main():
                               "p (launches)", "p (sessions)", "p (trend)"], rows)
 
     # ── round by round ──
-    listed = [k for k in keys if k[1] in ROUND_BY_ROUND]
+    listed = [k for k in keys if base_name(k[1]) in ROUND_BY_ROUND]
     if listed:
         out += ["## Launch medians round by round", "",
                 "One row per session, one column per round, in recording order. The letter after each value is "
                 "the condition of that round: " + ", ".join(f"{c[0]} for {c}" for c in conditions) + ".", ""]
-        for key in sorted(listed, key=lambda k: ROUND_BY_ROUND.index(k[1])):
+        for key in sorted(listed, key=lambda k: ROUND_BY_ROUND.index(base_name(k[1]))):
             cell = {launch: (m, c) for c in conditions
                     for launch, m in zip(result[(c, key)]["order"], result[(c, key)]["medians"])}
             unit, div = unit_for(median([m for m, _ in cell.values()]))
@@ -477,7 +504,8 @@ def main():
     # ── pipeline ratio and latency ──
     rows = []
     for c in conditions:
-        spsc, mutex = reps[c].get(RATIO[0]), reps[c].get(RATIO[1])
+        found = {(binary, base_name(name)): launches_of for (binary, name), launches_of in reps[c].items()}
+        spsc, mutex = found.get(RATIO[0]), found.get(RATIO[1])
         if spsc and mutex:
             ratios = [median(mutex[k]) / median(spsc[k]) for k in sorted(spsc) if k in mutex]
             rows.append([c, len(ratios), f"{min(ratios):.2f}×", f"{median(ratios):.2f}×", f"{max(ratios):.2f}×"])
@@ -487,7 +515,7 @@ def main():
     out += table(["Condition", "Rounds", "Lowest", "Median", "Highest"], rows)
 
     latency = defaultdict(lambda: defaultdict(list))    # (condition, pipeline, percentile) -> launch -> ticks
-    for row in read(opts.study / "latency.csv"):
+    for row in counted(read(opts.study / "latency.csv")):
         if row["percentile"] in ("P50", "P99"):
             latency[(row["condition"], PIPELINES[row["binary"]], row["percentile"])][
                 (int(row["session"]), int(row["round"]))].append(int(row["tsc_ticks"]))
@@ -499,9 +527,9 @@ def main():
         rows.append([c, pipeline, percentile, f"{median(meds):,.0f}", f"{min(meds):,.0f}", f"{max(meds):,.0f}",
                      pct(spread(meds)), f"{inside:.1f}×"])
     out += ["## Pipeline latency at 100,000 orders", "",
-            "In TSC ticks, the unit of the processor's timestamp counter; not converted to time because the "
-            "counter's frequency has not been calibrated. Each launch prints one report per repetition; a "
-            "launch is represented by the median of its reports.", ""]
+            "In TSC ticks, the unit of the processor's timestamp counter; " + unit_note(env)
+            + " Each launch prints one report per repetition; a launch is represented by the median of its "
+            "reports" + (", leaving out the warm-up's." if d.get("warmup_repetitions") else "."), ""]
     out += table(["Condition", "Pipeline", "Percentile", "Median of launches", "Lowest launch", "Highest launch",
                   "Spread of launch medians", "Highest / lowest report inside a launch, median"], rows, right_from=3)
 

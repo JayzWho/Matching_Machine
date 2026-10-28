@@ -4,8 +4,8 @@
 #
 # A performance number without its environment is not evidence. This emits a
 # JSON record of the commit, toolchain, build flags, CPU, frequency policy,
-# thermal state and kernel settings in effect, to be archived next to the raw
-# benchmark output.
+# TSC frequency, thermal state and kernel settings in effect, to be archived
+# next to the raw benchmark output.
 #
 # Usage:
 #   ./scripts/env/capture_env.sh                        # JSON to stdout
@@ -146,6 +146,19 @@ MAX_PCT="$(rd "$CPU_DIR/intel_pstate/max_perf_pct")"
 FREQ_MHZ="$(for c in $(online_cpus); do
     printf '%s:%s;' "$c" "$(( $(rd "$CPU_DIR/cpu$c/cpufreq/scaling_cur_freq" || echo 0) / 1000 ))"; done)"
 
+# The TSC frequency, measured against CLOCK_MONOTONIC by a program of the build
+# (scripts/env/tsc_calibrate.cpp; about one second). Latency is recorded in TSC
+# ticks, and this is the factor that converts them to time on this machine.
+# The flags say whether the counter runs at a constant rate in every power
+# state, and the clock source whether the kernel itself trusts it.
+TSC_CALIBRATION=null
+if [ -x "$BUILD_DIR/tsc_calibrate" ]; then
+    TSC_CALIBRATION="$("$BUILD_DIR/tsc_calibrate" 2>/dev/null)" || TSC_CALIBRATION=null
+    [ -n "$TSC_CALIBRATION" ] || TSC_CALIBRATION=null
+fi
+TSC_FLAGS="$(grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -x -E 'constant_tsc|nonstop_tsc|tsc_reliable' | tr '\n' ' ' | sed 's/ $//' || true)"
+CLOCKSOURCE="$(rd /sys/devices/system/clocksource/clocksource0/current_clocksource)"
+
 TEMPS="$(for z in /sys/class/thermal/thermal_zone*/; do
     t="$(rd "$z/type")"; v="$(rd "$z/temp")"
     if [ -n "$v" ]; then printf '%s:%s;' "$t" "$((v/1000))"; fi; done)"
@@ -224,6 +237,10 @@ kv  no_turbo "$NO_TURBO";  printf ',\n'
 kv  min_perf_pct "$MIN_PCT"; printf ',\n'
 kv  max_perf_pct "$MAX_PCT"; printf ',\n'
 kv  current_mhz "$FREQ_MHZ"; printf '\n  },\n'
+printf '  "tsc": {\n'
+kv  cpu_flags "$TSC_FLAGS";     printf ',\n'
+kv  clocksource "$CLOCKSOURCE"; printf ',\n'
+kvn calibration "$TSC_CALIBRATION"; printf '\n  },\n'
 printf '  "thermal": {\n'
 kvn core_throttle_total "$(throttle_core_total)";   printf ',\n'
 kvn package_throttle "$(throttle_package)";         printf ',\n'

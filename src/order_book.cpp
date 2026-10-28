@@ -40,13 +40,17 @@ std::vector<Trade> OrderBook::add_order(Order* order) {
 }
 
 bool OrderBook::cancel_order(uint64_t order_id) {
+    return cancel_resting(order_id) != nullptr;
+}
+
+Order* OrderBook::cancel_resting(uint64_t order_id) {
     auto it = order_index_.find(order_id);
-    if (it == order_index_.end()) return false;
+    if (it == order_index_.end()) return nullptr;
 
     Order* order = it->second;
     if (order->status == OrderStatus::FILLED ||
         order->status == OrderStatus::CANCELLED) {
-        return false;
+        return nullptr;
     }
 
     order->status = OrderStatus::CANCELLED;
@@ -78,7 +82,7 @@ bool OrderBook::cancel_order(uint64_t order_id) {
     }
 
     order_index_.erase(it);
-    return true;
+    return order;
 }
 
 int64_t OrderBook::best_bid() const noexcept {

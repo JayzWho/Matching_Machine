@@ -13,8 +13,8 @@ All four are built from `benchmarks/` by the Release configuration.
 |---|---|---|---|
 | `bench_order_book` | Add, match, sweep, cancel and mixed workload on the order book (8) | 1 | the first measurement core |
 | `bench_spsc_ring_buffer` | Ring buffer push and pop (2); producer to consumer over the SPSC ring buffer (3) and over a mutex queue (2) | 1, then 2 | both measurement cores |
-| `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report | 2 | both measurement cores |
-| `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report | 2 | both measurement cores |
+| `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report | 2 | both measurement cores: the producer thread on the lower-numbered, the consumer on the higher |
+| `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report | 2 | as `bench_matching_engine` |
 
 These programs still contain the defects described in `AUDIT.md`. A recording
 of them in that state is called a **control**: it exists so that a later fix
@@ -28,7 +28,7 @@ of the mutex pipeline; see [`evidence/README.md`](evidence/README.md).
 
 | Term | Meaning |
 |---|---|
-| repetition | One Google Benchmark repetition inside a process |
+| repetition | One Google Benchmark repetition inside a process. The first repetition of each benchmark in a launch is a **warm-up**: it is recorded and marked in `samples.csv`, and the reports leave it out |
 | launch | One execution of one benchmark binary |
 | round | One launch of each of the four binaries, in an order that rotates from round to round |
 | session | One span of measurement mode, from `setup` to `restore` |
@@ -46,7 +46,8 @@ script it tests, and `ctest` runs all of them (`ctest -L scripts` only those).
 |---|---|---|
 | `env/bench_env.sh` | for `setup` and `restore` | Enters and leaves measurement mode: frequency pinned at base with turbo off, SMT siblings offline, movable device interrupts steered to the other cores, `perf_event_paranoid` lowered. `status`, `cores` and `throttle` need no root |
 | `env/install_bench_env.sh` | once | Installs a root-owned copy of `bench_env.sh` at `/usr/local/sbin/mm-bench-env`, so that one sudoers rule can allow `setup` and `restore` without a password. `--pin` fixes the measurement cores, `--check` verifies the installation |
-| `env/capture_env.sh` | no | Writes a JSON record of the commit, toolchain, build flags, CPU, frequency policy, thermal state and measurement cores |
+| `env/capture_env.sh` | no | Writes a JSON record of the commit, toolchain, build flags, CPU, frequency policy, TSC frequency, thermal state and measurement cores |
+| `env/tsc_calibrate.cpp` | no | Built with the benchmarks. Measures the TSC frequency against `CLOCK_MONOTONIC` for `capture_env.sh` |
 | `record/bench_record.py` | no | Records a study of the four binaries. Enters and leaves measurement mode itself through the sudoers rule |
 | `record/bench_diagnose.py` | no | Records a rotating matrix of focused diagnostic conditions, entering and restoring measurement mode itself |
 | `report/bench_report.py` | no | Turns a study directory into Markdown tables |
@@ -71,10 +72,10 @@ scripts/record/bench_record.py --label control
 scripts/report/bench_report.py docs/evidence/<cpu>/<study>
 ```
 
-`bench_record.py` runs four sessions of eight rounds with five repetitions by
-default, which takes about 80 minutes on the reference machine. Rounds
-alternate between the two conditions, and the condition that goes first
-alternates between sessions.
+`bench_record.py` runs four sessions of eight rounds with six repetitions by
+default, the first a warm-up, which takes about 95 minutes on the reference
+machine. Rounds alternate between the two conditions, and the condition that
+goes first alternates between sessions.
 
 Save the state of virtual machines and close heavy applications before
 recording. In the `cleared` condition the recorder moves the invoking user's
@@ -126,7 +127,8 @@ report gives four numbers about those launch medians:
 
 A benchmark moves between launches when p is below 0.001. The same test is
 applied to the launch medians grouped by session and by condition, and a rank
-correlation with recording order tests for a trend over time.
+correlation with recording order tests for a trend over time. Warm-up
+repetitions are left out of all of these.
 
 The test compares the rank sums of the launches (the Kruskal-Wallis statistic)
 and not their spread, because a benchmark that settles on one of two levels at
@@ -147,8 +149,7 @@ results for reasons other than the code under test. Until a pull request fixes
 each, do not compare them between versions of the code:
 
 - **Both latency reports.** They measure how long an order waits in the queue,
-  not how long matching takes (`AUDIT.md`, C1). At the start of a run both SPSC
-  workers can land on one CPU, which raises P99 and P999 several-fold.
+  not how long matching takes (`AUDIT.md`, C1).
 - **The producer-to-consumer benchmarks of `bench_spsc_ring_buffer`.** In
   `BM_SPSC_ProducerConsumer` the consumer adds every item to a checksum on the
   cache line of `N`, which the producer reads for every item. All three keep
@@ -168,20 +169,22 @@ each, do not compare them between versions of the code:
   measurements. The Order ring and the mutex queue have no such levels; they are
   reported by their median over the same measurements.
 
-The pipeline throughput is comparable through launch medians. Its first
-repetition pays a one-time cost, so the scatter inside a launch overstates its
-noise. A warm-up removes the cost only if it runs one call of the benchmark: a
-longer one exhausts the engine's memory pool and hangs.
+The pipeline throughput is comparable through launch medians. The first
+repetition in a launch pays a one-time cost of the process, which is why the
+recorders mark the first repetition of every benchmark as a warm-up.
 
 ## Known limits
 
 - Tasks of other users and kernel threads are not kept off the measurement
   cores. Doing so needs a cpuset set up by `bench_env.sh setup`.
-- The two threads of a two-threaded benchmark are placed by the scheduler
-  within the two measurement cores; the benchmark code does not pin them.
-- Latency is reported in ticks of the processor's timestamp counter (TSC). The
-  counter's frequency has not been calibrated, so ticks are not converted to
-  time.
+- The pipeline benchmarks pin each of their two threads to one measurement
+  core when the thread is created, and print the placement in each benchmark's
+  label. The producer-to-consumer benchmarks of `bench_spsc_ring_buffer` still
+  leave their two threads to the scheduler.
+- Latency is reported in ticks of the processor's timestamp counter (TSC).
+  `capture_env.sh` measures the counter's frequency against `CLOCK_MONOTONIC`
+  before and after every session and records it in `env.json` under `tsc`;
+  the reports do not convert ticks to time yet.
 - The timer tick, softirqs and per-CPU kernel threads stay on the measurement
   cores. Removing them needs kernel boot parameters.
 - A study covers one boot. Whether results move across reboots or kernel

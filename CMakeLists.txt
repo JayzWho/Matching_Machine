@@ -165,12 +165,14 @@ add_executable(test_order_book       tests/test_order_book.cpp)
 add_executable(test_spsc_ring_buffer tests/test_spsc_ring_buffer.cpp)
 add_executable(test_memory_pool      tests/test_memory_pool.cpp)
 add_executable(test_matching_engine  tests/test_matching_engine.cpp)
+add_executable(test_thread_placement tests/test_thread_placement.cpp)
 
 foreach(test_target
     test_order_book
     test_spsc_ring_buffer
     test_memory_pool
-    test_matching_engine)
+    test_matching_engine
+    test_thread_placement)
   target_link_libraries(${test_target} PRIVATE
     matching_engine_lib
     GTest::gtest_main
@@ -224,3 +226,10 @@ foreach(bench_target
     benchmark::benchmark_main
   )
 endforeach()
+
+# TSC 频率标定（对照 CLOCK_MONOTONIC），由 scripts/env/capture_env.sh 调用，
+# 结果写进每次录制的环境记录。测试只检查它能运行并打印出频率。
+add_executable(tsc_calibrate scripts/env/tsc_calibrate.cpp)
+add_test(NAME tsc_calibrate COMMAND tsc_calibrate)
+set_tests_properties(tsc_calibrate PROPERTIES
+  PASS_REGULAR_EXPRESSION "^\\{\"ghz\": [0-9]+\\.[0-9]+, \"ghz_min\": [0-9]+\\.[0-9]+, \"ghz_max\": [0-9]+\\.[0-9]+,")

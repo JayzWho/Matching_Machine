@@ -45,12 +45,17 @@ OrderBook* MatchingEngine::get_order_book(std::string_view symbol) {
 void MatchingEngine::start(std::string_view symbol,
                            int64_t         base_price,
                            size_t          order_count,
-                           double          cancel_ratio) {
+                           double          cancel_ratio,
+                           ThreadCpus      cpus) {
     if (running_.load(std::memory_order_acquire)) {
         throw std::runtime_error("MatchingEngine: already running");
     }
 
     // 重置状态
+    // 内存池补满：上一轮结束时仍挂在簿上的订单随消费者的订单簿一起销毁，槽位不会再归还。
+    // 不重置的话每轮少一批槽位（10 万笔一轮约 1.4 万），多跑几轮后生产者拿不到槽位，永远空转。
+    // 此时两个线程都已 join，没有任何槽位还在使用。
+    order_pool_.reset();
     producer_done_.store(false, std::memory_order_relaxed);
     consumer_done_.store(false, std::memory_order_relaxed);
     consumed_count_.store(0, std::memory_order_relaxed);
@@ -59,14 +64,22 @@ void MatchingEngine::start(std::string_view symbol,
     running_.store(true, std::memory_order_release);
 
     // 启动两个线程（先消费者，再生产者，避免生产者推入时消费者未就绪）
-    consumer_thread_ = std::thread([this, sym = std::string(symbol)] {
-        consumer_loop(sym);
-    });
+    try {
+        consumer_thread_ = PinnedThread(cpus.consumer, [this, sym = std::string(symbol)] {
+            consumer_loop(sym);
+        });
 
-    producer_thread_ = std::thread([this, sym = std::string(symbol),
-                                    base_price, order_count, cancel_ratio] {
-        producer_loop(sym, base_price, order_count, cancel_ratio);
-    });
+        producer_thread_ = PinnedThread(cpus.producer, [this, sym = std::string(symbol),
+                                                        base_price, order_count, cancel_ratio] {
+            producer_loop(sym, base_price, order_count, cancel_ratio);
+        });
+    } catch (...) {
+        // 线程没起来（例如 CPU 编号不可用）：让已起来的消费者排空后退出，再把错误交给调用方
+        producer_done_.store(true, std::memory_order_release);
+        if (consumer_thread_.joinable()) consumer_thread_.join();
+        running_.store(false, std::memory_order_release);
+        throw;
+    }
 }
 
 void MatchingEngine::stop() {
@@ -174,7 +187,7 @@ void MatchingEngine::consumer_loop(std::string_view symbol) {
             latency_recorder_.record(latency);
 
             // 归还由 add_order_noalloc 内部的 deallocator 统一负责：
-            //   FILLED incoming 和 CANCEL 均在那里归还；挂单留在 PriceLevel 中
+            //   FILLED incoming、撤单请求和被撤的挂单均在那里归还；挂单留在 PriceLevel 中
 
             consumed_count_.fetch_add(1, std::memory_order_relaxed);
 

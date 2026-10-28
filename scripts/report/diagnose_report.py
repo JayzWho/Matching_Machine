@@ -4,7 +4,8 @@
 Usage: python3 scripts/report/diagnose_report.py STUDY [STUDY ...]
        python3 scripts/report/diagnose_report.py --format csv STUDY
 
-Each launch is the median of its recorded repetitions (five by default).
+Each launch is the median of its counted repetitions: those not marked as a
+warm-up in samples.csv (studies before the mark existed count all of them).
 CV uses sample standard deviation. IQR uses inclusive, linearly interpolated
 quartiles. Studies are reported separately, never silently pooled. Layout lines
 are joined to launches through command metadata, not the condition index in a
@@ -149,7 +150,8 @@ def summarize(directory):
     if environment.get("complete") is False:
         raise ValueError(f"{directory}: study is incomplete; wait for recording and cleanup")
     expected = environment.get("design", {}).get("repetitions", 5)
-    if not isinstance(expected, int) or expected < 1:
+    warmup = environment.get("design", {}).get("warmup_repetitions", 0)
+    if not isinstance(expected, int) or not isinstance(warmup, int) or not 0 <= warmup < expected:
         raise ValueError(f"{directory}: invalid repetition count")
     samples = read_csv(directory / "samples.csv")
     launches = read_csv(directory / "launches.csv")
@@ -167,6 +169,8 @@ def summarize(directory):
         key = launch_key(row)
         if key not in launch_records:
             raise ValueError(f"sample has no matching launch: {key}")
+        if int(row.get("warmup") or 0):
+            continue
         group = repetitions[(key, row["benchmark"])]
         index = int(row["repetition"])
         if index in group:
@@ -178,8 +182,8 @@ def summarize(directory):
 
     grouped, launch_medians = defaultdict(list), defaultdict(dict)
     for (key, benchmark), repetition_values in repetitions.items():
-        if set(repetition_values) != set(range(expected)):
-            raise ValueError(f"incomplete repetitions: {key}, {benchmark}; expected {expected}")
+        if set(repetition_values) != set(range(warmup, expected)):
+            raise ValueError(f"incomplete repetitions: {key}, {benchmark}; expected {expected - warmup}")
         values = list(repetition_values.values())
         grouped[(*key[2:], benchmark)].append((stats.median(values), cv(values)))
         launch_medians[key][benchmark] = stats.median(values)
@@ -194,7 +198,7 @@ def summarize(directory):
         inside_cv = [value for _, value in entries if value is not None]
         rows.append({
             "kind": "benchmark", "condition": condition, "binary": binary, "benchmark": benchmark,
-            "launches": len(medians), "repetitions": expected,
+            "launches": len(medians), "repetitions": expected - warmup,
             "median_ns": stats.median(medians), "min_ns": min(medians), "max_ns": max(medians),
             "spread_pct": (max(medians) / min(medians) - 1) * 100,
             "launch_cv_pct": cv(medians), "iqr_pct": iqr_percent(medians),

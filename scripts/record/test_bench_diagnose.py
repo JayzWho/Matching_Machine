@@ -38,6 +38,28 @@ class DiagnosticTests(unittest.TestCase):
             self.assertEqual(condition["binary"], str(recorder.ROOT / "build/diagnostic/bench_mutex"))
             self.assertEqual(condition["prefix"], [])
 
+    def test_first_repetition_marked_as_warmup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            opts = argparse.Namespace(output=Path(directory), sessions=1, blocks=1, repetitions=3)
+            condition = {"name": "control", "binary": "/bin/true", "filter": "Pipeline",
+                         "prefix": [], "env": {}, "args": []}
+            study = diagnose.DiagnosticStudy(opts, [condition])
+            study.raw.mkdir(parents=True)
+            sampled = [("BM_Test", repetition, 100.0, 100.0, 1) for repetition in range(3)]
+            with patch.object(recorder, "launch", return_value=(b"", [], {"exit_status": 0})), \
+                 patch.object(recorder, "samples", return_value=sampled), \
+                 patch.object(recorder, "intervals", return_value=[]), \
+                 patch.object(recorder, "latency_reports", return_value=[{"P50": 7}] * 3):
+                study.one(1, 1, 1, condition, [1, 3], {1, 3}, (0, 0, 0))
+            self.assertEqual([row["warmup"] for row in study.rows["samples"]], [1, 0, 0])
+            self.assertEqual([row["warmup"] for row in study.rows["latency"]], [1, 0, 0])
+
+    def test_single_repetition_rejected(self):
+        result = subprocess.run([sys.executable, "-B", str(Path(diagnose.__file__)), "--matrix", "unused.json",
+                                 "--output", "unused", "--repetitions", "1"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("warm-up", result.stderr)
+
     def test_cleared_condition_accepts_only_named_unmovable_tasks(self):
         opts = argparse.Namespace(output=Path("/nonexistent"), allow_unmovable=["systemd"])
         study = diagnose.DiagnosticStudy(opts, [])

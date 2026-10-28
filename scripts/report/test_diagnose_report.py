@@ -95,6 +95,27 @@ class SummaryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate repetition"):
             diagnose_report.summarize(self.path)
 
+    def test_warmup_repetition_recorded_but_not_counted(self):
+        (self.path / "env.json").write_text(json.dumps(
+            {"complete": True, "design": {"repetitions": 6, "warmup_repetitions": 1}}))
+        for row in self.samples:
+            row["repetition"] += 1
+            row["warmup"] = 0
+        for launch in self.launches:
+            key = {k: launch[k] for k in ("session", "block", "condition", "binary")}
+            self.samples.append({**key, "benchmark": "BM_Test", "repetition": 0, "warmup": 1,
+                                 "real_time_ns": 10**9})
+        self.write_rows()
+        result = next(row for row in diagnose_report.summarize(self.path) if row["kind"] == "benchmark")
+        self.assertEqual(result["repetitions"], 5)
+        self.assertEqual(result["median_ns"], 150)
+        self.assertEqual(result["max_ns"], 200)
+        # A counted repetition cannot be replaced by the warm-up.
+        self.samples = [row for row in self.samples if row["repetition"] != 1]
+        self.write_rows()
+        with self.assertRaisesRegex(ValueError, "incomplete repetitions"):
+            diagnose_report.summarize(self.path)
+
     def test_incomplete_study_rejected(self):
         (self.path / "env.json").write_text('{"complete": false}')
         with self.assertRaisesRegex(ValueError, "study is incomplete"):
