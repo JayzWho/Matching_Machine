@@ -67,6 +67,8 @@ FAMILIES = [
      lambda b, n: n.startswith("BM_MutexPipeline_Throughput")),
 ]
 PIPELINES = {"bench_matching_engine": "SPSC pipeline", "bench_baseline_mutex": "Mutex pipeline"}
+# Names as recorded before the pipeline throughput benchmarks reported real
+# time; since then Google Benchmark appends "/real_time" to them (base_name()).
 RATIO = (("bench_matching_engine", "BM_Pipeline_Throughput/100000/iterations:3"),
          ("bench_baseline_mutex", "BM_MutexPipeline_Throughput/100000/iterations:3"))
 # The benchmarks whose launch medians are listed round by round.
@@ -83,6 +85,12 @@ PLAIN = ("temp_start_c", "temp_end_c", "position", "cpu_per_wall")
 def read(path):
     with open(path, newline="") as fh:
         return list(csv.DictReader(fh))
+
+
+def base_name(name):
+    """A pipeline throughput benchmark's name without the suffix that real time added."""
+    stem = name.removesuffix("/real_time")
+    return stem if stem.startswith(("BM_Pipeline_Throughput/", "BM_MutexPipeline_Throughput/")) else name
 
 
 def unit_note(env):
@@ -385,12 +393,12 @@ def main():
                               "p (launches)", "p (sessions)", "p (trend)"], rows)
 
     # ── round by round ──
-    listed = [k for k in keys if k[1] in ROUND_BY_ROUND]
+    listed = [k for k in keys if base_name(k[1]) in ROUND_BY_ROUND]
     if listed:
         out += ["## Launch medians round by round", "",
                 "One row per session, one column per round, in recording order. The letter after each value is "
                 "the condition of that round: " + ", ".join(f"{c[0]} for {c}" for c in conditions) + ".", ""]
-        for key in sorted(listed, key=lambda k: ROUND_BY_ROUND.index(k[1])):
+        for key in sorted(listed, key=lambda k: ROUND_BY_ROUND.index(base_name(k[1]))):
             cell = {launch: (m, c) for c in conditions
                     for launch, m in zip(result[(c, key)]["order"], result[(c, key)]["medians"])}
             unit, div = unit_for(median([m for m, _ in cell.values()]))
@@ -496,7 +504,8 @@ def main():
     # ── pipeline ratio and latency ──
     rows = []
     for c in conditions:
-        spsc, mutex = reps[c].get(RATIO[0]), reps[c].get(RATIO[1])
+        found = {(binary, base_name(name)): launches_of for (binary, name), launches_of in reps[c].items()}
+        spsc, mutex = found.get(RATIO[0]), found.get(RATIO[1])
         if spsc and mutex:
             ratios = [median(mutex[k]) / median(spsc[k]) for k in sorted(spsc) if k in mutex]
             rows.append([c, len(ratios), f"{min(ratios):.2f}×", f"{median(ratios):.2f}×", f"{max(ratios):.2f}×"])

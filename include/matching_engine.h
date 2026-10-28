@@ -7,6 +7,7 @@
 #include "trade_ring_buffer.h"
 #include "feed_simulator.h"
 #include "latency_recorder.h"
+#include "thread_placement.h"
 
 #include <vector>
 #include <string_view>
@@ -98,11 +99,14 @@ public:
      * @param base_price   基准价格（整数定价）
      * @param order_count  本次运行的订单总量（0 表示无限，直到 stop() 被调用）
      * @param cancel_ratio 撤单比例 [0.0, 1.0]，传给 FeedSimulator
+     * @param cpus         生产者、消费者线程各自钉在哪个 CPU（创建时即生效）；
+     *                     默认 {-1, -1}：不钉核，由调度器摆放
      */
     void start(std::string_view symbol,
                int64_t         base_price,
                size_t          order_count  = 100'000,
-               double          cancel_ratio = 0.2);
+               double          cancel_ratio = 0.2,
+               ThreadCpus      cpus         = {});
 
     /**
      * @brief 停止流水线，等待双线程退出
@@ -165,8 +169,8 @@ private:
     // 端到端延迟记录器（Consumer 线程写，stop() 后 report）
     LatencyRecorder latency_recorder_{200'000};
 
-    std::thread producer_thread_;
-    std::thread consumer_thread_;
+    PinnedThread producer_thread_;
+    PinnedThread consumer_thread_;
 
     // running_：流水线是否在运行（start/stop 控制）
     std::atomic<bool> running_{false};

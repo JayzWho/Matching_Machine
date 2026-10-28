@@ -10,7 +10,8 @@ launches. The test must stay quiet when the launches do not differ and must
 find both a gradual difference and a benchmark that settles on one of two
 levels at each launch. Also checks that rows marked as a warm-up are left out,
 and that rows of studies recorded before the mark existed all count, and that
-the latency table states the calibrated TSC frequency when a study has one.
+the latency table states the calibrated TSC frequency when a study has one, and
+that the pipeline throughput benchmarks are found under both of their names.
 """
 import random
 import sys
@@ -44,10 +45,18 @@ def tsc_frequency_stated():
             and "has not been calibrated" in bench_report.unit_note({"sessions": [{"before": {}}]}))
 
 
+def pipeline_names_matched():
+    old, new = "BM_Pipeline_Throughput/100000/iterations:3", "BM_Pipeline_Throughput/100000/iterations:3/real_time"
+    queue = "BM_SPSC_ProducerConsumer/100000/real_time"
+    return (bench_report.base_name(old) == old and bench_report.base_name(new) == old
+            and bench_report.base_name(queue) == queue)
+
+
 def main():
     gen, failed = random.Random(1), False
     for name, check in (("warm-up rows left out, unmarked rows counted", warmup_rows_left_out),
-                        ("calibrated TSC frequency stated", tsc_frequency_stated)):
+                        ("calibrated TSC frequency stated", tsc_frequency_stated),
+                        ("pipeline throughput found under both names", pipeline_names_matched)):
         ok = check()
         failed |= not ok
         print(f"{'ok  ' if ok else 'FAIL'} {name}")
