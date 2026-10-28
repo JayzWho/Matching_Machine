@@ -28,7 +28,7 @@ of the mutex pipeline; see [`evidence/README.md`](evidence/README.md).
 
 | Term | Meaning |
 |---|---|
-| repetition | One Google Benchmark repetition inside a process |
+| repetition | One Google Benchmark repetition inside a process. The first repetition of each benchmark in a launch is a **warm-up**: it is recorded and marked in `samples.csv`, and the reports leave it out |
 | launch | One execution of one benchmark binary |
 | round | One launch of each of the four binaries, in an order that rotates from round to round |
 | session | One span of measurement mode, from `setup` to `restore` |
@@ -71,10 +71,10 @@ scripts/record/bench_record.py --label control
 scripts/report/bench_report.py docs/evidence/<cpu>/<study>
 ```
 
-`bench_record.py` runs four sessions of eight rounds with five repetitions by
-default, which takes about 80 minutes on the reference machine. Rounds
-alternate between the two conditions, and the condition that goes first
-alternates between sessions.
+`bench_record.py` runs four sessions of eight rounds with six repetitions by
+default, the first a warm-up, which takes about 95 minutes on the reference
+machine. Rounds alternate between the two conditions, and the condition that
+goes first alternates between sessions.
 
 Save the state of virtual machines and close heavy applications before
 recording. In the `cleared` condition the recorder moves the invoking user's
@@ -126,7 +126,8 @@ report gives four numbers about those launch medians:
 
 A benchmark moves between launches when p is below 0.001. The same test is
 applied to the launch medians grouped by session and by condition, and a rank
-correlation with recording order tests for a trend over time.
+correlation with recording order tests for a trend over time. Warm-up
+repetitions are left out of all of these.
 
 The test compares the rank sums of the launches (the Kruskal-Wallis statistic)
 and not their spread, because a benchmark that settles on one of two levels at
@@ -168,10 +169,12 @@ each, do not compare them between versions of the code:
   measurements. The Order ring and the mutex queue have no such levels; they are
   reported by their median over the same measurements.
 
-The pipeline throughput is comparable through launch medians. Its first
-repetition pays a one-time cost, so the scatter inside a launch overstates its
-noise. A warm-up removes the cost only if it runs one call of the benchmark: a
-longer one exhausts the engine's memory pool and hangs.
+The pipeline throughput is comparable through launch medians. The first
+repetition in a launch pays a one-time cost of the process, which is why the
+recorders mark the first repetition of every benchmark as a warm-up. Google
+Benchmark's own warm-up (`--benchmark_min_warmup_time`) is not a substitute: it
+runs the pipeline on one engine many times, which exhausts the engine's memory
+pool and hangs.
 
 ## Known limits
 

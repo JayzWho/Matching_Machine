@@ -2,6 +2,8 @@
 """Record a rotated matrix of repeat-launch diagnostic conditions.
 
 A block launches every condition once; a session is one setup/restore span.
+The first repetition of each benchmark in a launch is a warm-up: it is kept in
+samples.csv and latency.csv with `warmup` set to 1, and left out by the report.
 Each condition is a JSON object with name, binary and filter, and optional
 prefix (argv list), env (string overrides) and args (benchmark argv list).
 Binary basenames resolve in build/release; other relative paths resolve at
@@ -142,7 +144,9 @@ class DiagnosticStudy:
             "commit": git.stdout.strip(),
             "git_status": recorder.run("git", "status", "--porcelain").stdout,
             "design": {"sessions": self.opts.sessions, "blocks_per_session": self.opts.blocks,
-                       "repetitions": self.opts.repetitions, "interference": self.opts.interference,
+                       "repetitions": self.opts.repetitions,
+                       "warmup_repetitions": recorder.WARMUP_REPETITIONS,
+                       "interference": self.opts.interference,
                        "allow_unmovable": getattr(self.opts, "allow_unmovable", []),
                        "launch_timeout_s": getattr(self.opts, "launch_timeout", None),
                        "warmup_min_time_s": self.opts.warmup, "sample_interval_s": 0.1,
@@ -288,6 +292,7 @@ class DiagnosticStudy:
         for name, repetition, real, cpu, iterations in sampled:
             counts.setdefault(name, set()).add(repetition)
             self.rows["samples"].append({**key, "benchmark": name, "repetition": repetition,
+                                         "warmup": recorder.warmup(repetition),
                                          "real_time_ns": repr(real), "cpu_time_ns": repr(cpu),
                                          "iterations": iterations})
         if not sampled or any(reps != set(range(self.opts.repetitions)) for reps in counts.values()):
@@ -297,9 +302,11 @@ class DiagnosticStudy:
                                            "cpu_s": round(cpu, 4),
                                            "cpu_per_wall": round(cpu / wall, 4) if wall else "",
                                            "waited_ms": round(waited, 3)})
+        # As in bench_record.py, report i is printed by repetition i.
         for index, report in enumerate(recorder.latency_reports(output)):
             for percentile, ticks in report.items():
-                self.rows["latency"].append({**key, "report": index, "percentile": percentile, "tsc_ticks": ticks})
+                self.rows["latency"].append({**key, "report": index, "warmup": recorder.warmup(index),
+                                             "percentile": percentile, "tsc_ticks": ticks})
         self.checkpoint()
 
     def leave(self):
@@ -362,7 +369,8 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--sessions", type=int, default=2)
     parser.add_argument("--blocks", type=int, default=8)
-    parser.add_argument("--repetitions", type=int, default=5)
+    parser.add_argument("--repetitions", type=int, default=6,
+                        help="per benchmark and launch, the first a warm-up (default 6)")
     parser.add_argument("--warmup", type=int, default=3, help="minimum seconds of discarded single-core warm-up")
     parser.add_argument("--interference", choices=("cleared", "shared"), default="cleared")
     parser.add_argument("--launch-timeout", type=float, default=300, metavar="SECONDS",
@@ -373,8 +381,10 @@ def main():
                              "affinity, such as a service manager holding a capability; recorded per "
                              "session, and any other refusal stops the study")
     opts = parser.parse_args()
-    if min(opts.sessions, opts.blocks, opts.repetitions) < 1:
-        parser.error("sessions, blocks and repetitions must all be positive")
+    if min(opts.sessions, opts.blocks) < 1:
+        parser.error("sessions and blocks must be positive")
+    if opts.repetitions <= recorder.WARMUP_REPETITIONS:
+        parser.error(f"repetitions must exceed the {recorder.WARMUP_REPETITIONS} warm-up repetition")
     if opts.warmup < 0:
         parser.error("warmup must be nonnegative")
     if not opts.launch_timeout > 0:
