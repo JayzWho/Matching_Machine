@@ -85,6 +85,12 @@ def read(path):
         return list(csv.DictReader(fh))
 
 
+def counted(rows):
+    """The rows not marked as a warm-up. Studies recorded before the mark
+    existed have no `warmup` column, and all of their rows count."""
+    return [row for row in rows if not int(row.get("warmup") or 0)]
+
+
 def median(values):
     s = sorted(values)
     k = len(s) // 2
@@ -239,7 +245,7 @@ def main():
 
     # reps[condition][(binary, benchmark)][(session, round)] = [real ns per repetition]
     reps = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    for row in read(opts.study / "samples.csv"):
+    for row in counted(read(opts.study / "samples.csv")):
         reps[row["condition"]][(row["binary"], row["benchmark"])][(int(row["session"]), int(row["round"]))] \
             .append(float(row["real_time_ns"]))
     launch_row = {(l["condition"], l["binary"], int(l["session"]), int(l["round"])): l for l in launches}
@@ -266,7 +272,9 @@ def main():
         ["Kernel", first["before"]["os"]["kernel"]],
         ["Measurement cores", ", ".join(map(str, first["cores"])) + f" (single-threaded binaries on {first['cores'][0]})"],
         ["Recorded", f"{launches[0]['started'][:16].replace('T', ' ')} to {launches[-1]['started'][11:16]}"],
-        ["Sessions × rounds × repetitions", f"{d['sessions']} × {d['rounds_per_session']} × {d['repetitions']}"],
+        ["Sessions × rounds × repetitions", f"{d['sessions']} × {d['rounds_per_session']} × {d['repetitions']}"
+         + (f", the first {d['warmup_repetitions']} of each benchmark a warm-up, left out"
+            if d.get("warmup_repetitions") else "")],
         ["Launches of each binary", ", ".join(f"{v} {c}" for c, v in per_condition.items())],
         ["Binaries built", ", ".join(sorted({v[:10] for v in env["binaries_built"].values()}))],
     ], right_from=2)
@@ -487,7 +495,7 @@ def main():
     out += table(["Condition", "Rounds", "Lowest", "Median", "Highest"], rows)
 
     latency = defaultdict(lambda: defaultdict(list))    # (condition, pipeline, percentile) -> launch -> ticks
-    for row in read(opts.study / "latency.csv"):
+    for row in counted(read(opts.study / "latency.csv")):
         if row["percentile"] in ("P50", "P99"):
             latency[(row["condition"], PIPELINES[row["binary"]], row["percentile"])][
                 (int(row["session"]), int(row["round"]))].append(int(row["tsc_ticks"]))
@@ -501,7 +509,8 @@ def main():
     out += ["## Pipeline latency at 100,000 orders", "",
             "In TSC ticks, the unit of the processor's timestamp counter; not converted to time because the "
             "counter's frequency has not been calibrated. Each launch prints one report per repetition; a "
-            "launch is represented by the median of its reports.", ""]
+            "launch is represented by the median of its reports"
+            + (", leaving out the warm-up's." if d.get("warmup_repetitions") else "."), ""]
     out += table(["Condition", "Pipeline", "Percentile", "Median of launches", "Lowest launch", "Highest launch",
                   "Spread of launch medians", "Highest / lowest report inside a launch, median"], rows, right_from=3)
 

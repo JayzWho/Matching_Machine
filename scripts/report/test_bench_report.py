@@ -8,7 +8,8 @@ Draws 16 launches of 5 repetitions with 2% scatter, 100 times for each of three
 cases, and counts how often the test marks the benchmark as moving between
 launches. The test must stay quiet when the launches do not differ and must
 find both a gradual difference and a benchmark that settles on one of two
-levels at each launch.
+levels at each launch. Also checks that rows marked as a warm-up are left out,
+and that rows of studies recorded before the mark existed all count.
 """
 import random
 import sys
@@ -28,8 +29,17 @@ CASES = (
 )
 
 
+def warmup_rows_left_out():
+    marked = [{"repetition": "0", "warmup": "1"}, {"repetition": "1", "warmup": "0"}]
+    unmarked = [{"repetition": "0"}, {"repetition": "1"}]
+    return (bench_report.counted(marked) == marked[1:] and bench_report.counted(unmarked) == unmarked)
+
+
 def main():
     gen, failed = random.Random(1), False
+    ok = warmup_rows_left_out()
+    failed |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} warm-up rows left out, unmarked rows counted")
     for name, factor, threshold, allowed in CASES:
         marks = 0
         for trial in range(TRIALS):
