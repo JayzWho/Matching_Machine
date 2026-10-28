@@ -165,12 +165,14 @@ add_executable(test_order_book       tests/test_order_book.cpp)
 add_executable(test_spsc_ring_buffer tests/test_spsc_ring_buffer.cpp)
 add_executable(test_memory_pool      tests/test_memory_pool.cpp)
 add_executable(test_matching_engine  tests/test_matching_engine.cpp)
+add_executable(test_thread_placement tests/test_thread_placement.cpp)
 
 foreach(test_target
     test_order_book
     test_spsc_ring_buffer
     test_memory_pool
-    test_matching_engine)
+    test_matching_engine
+    test_thread_placement)
   target_link_libraries(${test_target} PRIVATE
     matching_engine_lib
     GTest::gtest_main

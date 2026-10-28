@@ -9,6 +9,7 @@
  *   3. 消费者订单计数与内存池无泄漏
  *   4. TradeRingBuffer 成交记录写入正确性
  *   5. 并发压力：大批量订单无崩溃、无挂起
+ *   6. 线程钉核：钉在指定 CPU 上照常处理全部订单；CPU 不可用时 start() 抛出且引擎停下
  */
 
 #include "matching_engine.h"
@@ -19,6 +20,7 @@
 #include <cstring>
 #include <thread>
 #include <chrono>
+#include <system_error>
 
 using namespace me;
 
@@ -165,6 +167,39 @@ TEST(MatchingEnginePipelineTest, LargeBatch_NoHang) {
         << "Pipeline took too long (> 30 seconds)";
 
     EXPECT_EQ(engine.consumed_count(), 100'000u);
+}
+
+// ─── 3b. 线程钉核 ─────────────────────────────────────────────────────────────
+
+TEST(MatchingEnginePipelineTest, PinnedThreads_ProcessAllOrders) {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    ASSERT_EQ(sched_getaffinity(0, sizeof(set), &set), 0);
+    std::vector<int> cpus;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+        if (CPU_ISSET(cpu, &set)) cpus.push_back(cpu);
+
+    // 能用两个 CPU 时分开钉，只有一个时两个线程钉在同一个上
+    MatchingEngine engine;
+    engine.start("BTCUSD", 100'000'000, 1000, 0.2, ThreadCpus{cpus.front(), cpus.back()});
+    engine.stop();
+    EXPECT_EQ(engine.consumed_count(), 1000u);
+    EXPECT_FALSE(engine.running());
+}
+
+TEST(MatchingEnginePipelineTest, UnavailableCpu_ThrowsAndStops) {
+    const int outside = CPU_SETSIZE - 1;   // 不在本机上的 CPU 编号
+    MatchingEngine engine;
+    // 生产者起不来：已起来的消费者要退出，引擎回到停止状态，之后还能正常启动
+    EXPECT_THROW(engine.start("BTCUSD", 100'000'000, 1000, 0.2, ThreadCpus{outside, -1}), std::system_error);
+    EXPECT_FALSE(engine.running());
+    // 消费者起不来
+    EXPECT_THROW(engine.start("BTCUSD", 100'000'000, 1000, 0.2, ThreadCpus{-1, outside}), std::system_error);
+    EXPECT_FALSE(engine.running());
+
+    engine.start("BTCUSD", 100'000'000, 1000, 0.2);
+    engine.stop();
+    EXPECT_EQ(engine.consumed_count(), 1000u);
 }
 
 // ─── 4. add_order_noalloc 单元测试（直接测 OrderBook 接口） ─────────────────

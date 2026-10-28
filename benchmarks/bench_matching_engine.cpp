@@ -16,6 +16,8 @@
  *
  * 注意：
  *   - 多线程 benchmark 需要至少 2 个 CPU 核心
+ *   - 进程正好能用两个 CPU 时（如上面的 taskset），生产者钉在编号小的、消费者钉在编号大的上，
+ *     线程创建时即生效；否则不钉核，由调度器摆放。摆法写在每个基准的 label 里
  *   - 在腾讯云虚拟机上，硬件 PMU 不可用；延迟以 RDTSC 时钟周期报告
  *   - BM_Pipeline_LatencyReport 通过 MatchingEngine 内部 LatencyRecorder 手动输出，
  *     Google Benchmark 框架无法直接测量跨线程延迟分布
@@ -28,10 +30,17 @@
 #include "feed_simulator.h"
 #include "trade_ring_buffer.h"
 #include "latency_recorder.h"
+#include "thread_placement.h"
 
 using namespace me;
 
 // ─── 辅助工具 ────────────────────────────────────────────────────────────────
+
+// 线程摆法，写进 label，原始 JSON 里可以核对每次启动是否钉了核
+static std::string placement(const ThreadCpus& cpus) {
+    if (cpus.producer < 0) return "unpinned";
+    return "producer=cpu" + std::to_string(cpus.producer) + " consumer=cpu" + std::to_string(cpus.consumer);
+}
 
 static Order make_order(uint64_t id, Side side, int64_t price, int64_t qty) {
     Order o{};
@@ -55,10 +64,11 @@ static Order make_order(uint64_t id, Side side, int64_t price, int64_t qty) {
 static void BM_Pipeline_Throughput(benchmark::State& state) {
     const size_t order_count = static_cast<size_t>(state.range(0));
     constexpr double cancel_ratio = 0.2;
+    const ThreadCpus cpus = allowed_cpu_pair();
 
     MatchingEngine engine;
     for (auto _ : state) {
-        engine.start("BTCUSD", 100'000'000LL, order_count, cancel_ratio);
+        engine.start("BTCUSD", 100'000'000LL, order_count, cancel_ratio, cpus);
         engine.stop();
     }
 
@@ -66,7 +76,7 @@ static void BM_Pipeline_Throughput(benchmark::State& state) {
     state.SetItemsProcessed(
         state.iterations() * static_cast<int64_t>(order_count)
     );
-    state.SetLabel("orders=" + std::to_string(order_count));
+    state.SetLabel("orders=" + std::to_string(order_count) + " " + placement(cpus));
 }
 
 // 参数：订单数量（10K / 50K / 100K）
@@ -75,7 +85,8 @@ BENCHMARK(BM_Pipeline_Throughput)
     ->Arg(50'000)
     ->Arg(100'000)
     ->Unit(benchmark::kMillisecond)
-    ->Iterations(3);   // 减少迭代次数（每次都要启停线程）
+    ->Iterations(3)    // 减少迭代次数（每次都要启停线程）
+    ->UseRealTime();   // 计时的主线程只在 join 里等待，CPU 时间近乎为 0；吞吐必须按墙钟时间算
 
 // ─── 3. 单线程 add_order_noalloc 基线（无线程切换开销）────────────────────
 //
@@ -131,10 +142,11 @@ BENCHMARK(BM_SingleThread_Baseline)
 // 因此用一个"汇报型" benchmark 运行一次并手动 report。
 
 static void BM_Pipeline_LatencyReport(benchmark::State& state) {
+    const ThreadCpus cpus = allowed_cpu_pair();
     MatchingEngine engine;
     for (auto _ : state) {
         state.PauseTiming();
-        engine.start("BTCUSD", 100'000'000LL, 100'000, 0.2);
+        engine.start("BTCUSD", 100'000'000LL, 100'000, 0.2, cpus);
         engine.stop();
         state.ResumeTiming();
 
@@ -144,6 +156,7 @@ static void BM_Pipeline_LatencyReport(benchmark::State& state) {
         std::printf("  (Trades produced: %zu)\n\n",
                     engine.trade_buffer().total_written());
     }
+    state.SetLabel(placement(cpus));
 }
 
 BENCHMARK(BM_Pipeline_LatencyReport)

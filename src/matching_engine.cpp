@@ -45,7 +45,8 @@ OrderBook* MatchingEngine::get_order_book(std::string_view symbol) {
 void MatchingEngine::start(std::string_view symbol,
                            int64_t         base_price,
                            size_t          order_count,
-                           double          cancel_ratio) {
+                           double          cancel_ratio,
+                           ThreadCpus      cpus) {
     if (running_.load(std::memory_order_acquire)) {
         throw std::runtime_error("MatchingEngine: already running");
     }
@@ -59,14 +60,22 @@ void MatchingEngine::start(std::string_view symbol,
     running_.store(true, std::memory_order_release);
 
     // 启动两个线程（先消费者，再生产者，避免生产者推入时消费者未就绪）
-    consumer_thread_ = std::thread([this, sym = std::string(symbol)] {
-        consumer_loop(sym);
-    });
+    try {
+        consumer_thread_ = PinnedThread(cpus.consumer, [this, sym = std::string(symbol)] {
+            consumer_loop(sym);
+        });
 
-    producer_thread_ = std::thread([this, sym = std::string(symbol),
-                                    base_price, order_count, cancel_ratio] {
-        producer_loop(sym, base_price, order_count, cancel_ratio);
-    });
+        producer_thread_ = PinnedThread(cpus.producer, [this, sym = std::string(symbol),
+                                                        base_price, order_count, cancel_ratio] {
+            producer_loop(sym, base_price, order_count, cancel_ratio);
+        });
+    } catch (...) {
+        // 线程没起来（例如 CPU 编号不可用）：让已起来的消费者排空后退出，再把错误交给调用方
+        producer_done_.store(true, std::memory_order_release);
+        if (consumer_thread_.joinable()) consumer_thread_.join();
+        running_.store(false, std::memory_order_release);
+        throw;
+    }
 }
 
 void MatchingEngine::stop() {

@@ -13,8 +13,8 @@ All four are built from `benchmarks/` by the Release configuration.
 |---|---|---|---|
 | `bench_order_book` | Add, match, sweep, cancel and mixed workload on the order book (8) | 1 | the first measurement core |
 | `bench_spsc_ring_buffer` | Ring buffer push and pop (2); producer to consumer over the SPSC ring buffer (3) and over a mutex queue (2) | 1, then 2 | both measurement cores |
-| `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report | 2 | both measurement cores |
-| `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report | 2 | both measurement cores |
+| `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report | 2 | both measurement cores: the producer thread on the lower-numbered, the consumer on the higher |
+| `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report | 2 | as `bench_matching_engine` |
 
 These programs still contain the defects described in `AUDIT.md`. A recording
 of them in that state is called a **control**: it exists so that a later fix
@@ -149,8 +149,7 @@ results for reasons other than the code under test. Until a pull request fixes
 each, do not compare them between versions of the code:
 
 - **Both latency reports.** They measure how long an order waits in the queue,
-  not how long matching takes (`AUDIT.md`, C1). At the start of a run both SPSC
-  workers can land on one CPU, which raises P99 and P999 several-fold.
+  not how long matching takes (`AUDIT.md`, C1).
 - **The producer-to-consumer benchmarks of `bench_spsc_ring_buffer`.** In
   `BM_SPSC_ProducerConsumer` the consumer adds every item to a checksum on the
   cache line of `N`, which the producer reads for every item. All three keep
@@ -181,8 +180,10 @@ pool and hangs.
 
 - Tasks of other users and kernel threads are not kept off the measurement
   cores. Doing so needs a cpuset set up by `bench_env.sh setup`.
-- The two threads of a two-threaded benchmark are placed by the scheduler
-  within the two measurement cores; the benchmark code does not pin them.
+- The pipeline benchmarks pin each of their two threads to one measurement
+  core when the thread is created, and print the placement in each benchmark's
+  label. The producer-to-consumer benchmarks of `bench_spsc_ring_buffer` still
+  leave their two threads to the scheduler.
 - Latency is reported in ticks of the processor's timestamp counter (TSC).
   `capture_env.sh` measures the counter's frequency against `CLOCK_MONOTONIC`
   before and after every session and records it in `env.json` under `tsc`;
