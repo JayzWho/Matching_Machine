@@ -125,4 +125,38 @@ private:
 static_assert(sizeof(PinnedThread) == sizeof(std::thread),
               "PinnedThread must keep the layout of the objects whose std::thread members it replaces");
 
+/**
+ * @brief 把调用线程钉在一个 CPU 上，析构时恢复原来的 CPU 掩码
+ *
+ * 用于主线程自己当生产者的基准：在计时循环之前钉核，基准函数返回时恢复。
+ * 主线程在两个基准之间仍能用原来的 CPU，下一个基准的 allowed_cpu_pair() 依赖这一点。
+ * cpu < 0 时什么也不做，与 PinnedThread 相同。
+ */
+class ScopedPin {
+public:
+    explicit ScopedPin(int cpu) {
+        if (cpu < 0) return;
+        int err = pthread_getaffinity_np(pthread_self(), sizeof(saved_), &saved_);
+        if (err == 0) {
+            cpu_set_t set;
+            CPU_ZERO(&set);
+            CPU_SET(cpu, &set);
+            err = pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+        }
+        if (err != 0) throw std::system_error(err, std::generic_category(), "ScopedPin");
+        pinned_ = true;
+    }
+
+    ~ScopedPin() {
+        if (pinned_) pthread_setaffinity_np(pthread_self(), sizeof(saved_), &saved_);
+    }
+
+    ScopedPin(const ScopedPin&) = delete;
+    ScopedPin& operator=(const ScopedPin&) = delete;
+
+private:
+    cpu_set_t saved_{};
+    bool pinned_ = false;
+};
+
 } // namespace me

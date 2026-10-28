@@ -5,6 +5,7 @@
  *   1. PinnedThread 从创建起就只在指定 CPU 上运行；cpu < 0 时继承创建者的 CPU 掩码
  *   2. PinnedThread 的 joinable / join / 移动语义与 std::thread 相同；CPU 不可用时抛出
  *   3. allowed_cpu_pair() 只在调用线程正好能用两个 CPU 时给出 {编号小的, 编号大的}
+ *   4. ScopedPin 把调用线程钉在指定 CPU 上，析构时恢复原来的掩码；cpu < 0 时不动
  */
 
 #include "thread_placement.h"
@@ -136,4 +137,40 @@ TEST(AllowedCpuPairTest, OtherCountsLeaveThreadsUnpinned) {
         EXPECT_EQ(pair.producer, -1);
         EXPECT_EQ(pair.consumer, -1);
     }
+}
+
+// ─── 4. ScopedPin ────────────────────────────────────────────────────────────
+
+TEST(ScopedPinTest, PinsCallingThreadAndRestoresItsMask) {
+    const cpu_set_t before = own_mask();
+    const int cpu = cpus_in(before).back();
+    {
+        ScopedPin pin(cpu);
+        const cpu_set_t during = own_mask();
+        EXPECT_EQ(CPU_COUNT(&during), 1);
+        EXPECT_TRUE(CPU_ISSET(cpu, &during));
+        EXPECT_EQ(sched_getcpu(), cpu);
+    }
+    const cpu_set_t after = own_mask();
+    EXPECT_TRUE(CPU_EQUAL(&before, &after));
+}
+
+TEST(ScopedPinTest, NegativeCpuLeavesMaskAlone) {
+    const cpu_set_t before = own_mask();
+    {
+        ScopedPin pin(-1);
+        const cpu_set_t during = own_mask();
+        EXPECT_TRUE(CPU_EQUAL(&before, &during));
+    }
+    const cpu_set_t after = own_mask();
+    EXPECT_TRUE(CPU_EQUAL(&before, &after));
+}
+
+TEST(ScopedPinTest, UnavailableCpuThrowsAndLeavesMaskAlone) {
+    const int outside = CPU_SETSIZE - 1;   // 不在本机上的 CPU 编号
+    const cpu_set_t before = own_mask();
+    ASSERT_FALSE(CPU_ISSET(outside, &before));
+    EXPECT_THROW(ScopedPin pin(outside), std::system_error);
+    const cpu_set_t after = own_mask();
+    EXPECT_TRUE(CPU_EQUAL(&before, &after));
 }
