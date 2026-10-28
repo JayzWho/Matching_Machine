@@ -61,7 +61,7 @@ public:
      *
      * 与 add_order 逻辑完全相同，区别在于：
      *   - 成交结果直接写入外部 TradeRingBuffer，不构造 std::vector<Trade>
-     *   - 当挂单方订单被完全成交时，调用 deallocator(Order*) 通知外部归还内存池
+     *   - 当挂单方订单被完全成交或被撤单时，调用 deallocator(Order*) 通知外部归还内存池
      *
      * 热路径全程无堆分配，Deallocator 在编译期内联，无间接调用开销。
      *
@@ -99,6 +99,9 @@ public:
     void clear() noexcept;
 
 private:
+    /// 撤销订单，返回被撤的订单（不存在或已成交时返回 nullptr）；cancel_order 与撤单请求共用
+    Order* cancel_resting(uint64_t order_id);
+
     /// 内部撮合逻辑（返回 vector 版本，供旧接口使用）
     std::vector<Trade> match(Order* incoming);
 
@@ -174,7 +177,8 @@ void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf,
     }
 
     if (order->type == OrderType::CANCEL) {
-        cancel_order(order->order_id);
+        // 被撤的挂单已从价格档位和索引中移除，与撤单请求一起归还
+        if (Order* cancelled = cancel_resting(order->order_id)) deallocator(cancelled);
         deallocator(order);
         return;
     }
@@ -192,7 +196,7 @@ void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf,
 
     // deallocator 统一负责归还所有"处理完毕"的 Order：
     //   - FILLED incoming  → 在此归还
-    //   - CANCEL incoming  → 上方 early-return 处已归还
+    //   - CANCEL incoming  → 上方 early-return 处已归还，被撤的挂单也在那里归还
     //   - 挂单（PARTIAL/NEW）→ 留在 PriceLevel，由 match_noalloc 在其被后续成交时归还
     if (order->is_filled()) {
         deallocator(order);

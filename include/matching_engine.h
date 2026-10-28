@@ -31,7 +31,7 @@ inline constexpr size_t kReturnQueueCap = 4096;
 /// 内存池默认容量（Order 对象槽位数）
 /// 最坏情况：order_count 笔订单全部挂单无成交，需 = order_count。
 /// 128K 可覆盖 10 万笔测试，并留有余量应对极端挂单堆积场景。
-/// MemoryPool 现已改为堆分配（vector），此常量仅作为 start() 未显式指定时的默认值。
+/// MemoryPool 现已改为堆分配（vector），此常量是构造函数未指定容量时的默认值。
 inline constexpr size_t kOrderPoolCap   = 131072;
 
 /**
@@ -65,7 +65,8 @@ inline constexpr size_t kOrderPoolCap   = 131072;
  */
 class MatchingEngine {
 public:
-    MatchingEngine() = default;
+    /// @param pool_capacity 内存池的 Order 槽位数（测试可用小容量）
+    explicit MatchingEngine(size_t pool_capacity = kOrderPoolCap) : order_pool_(pool_capacity) {}
     ~MatchingEngine();
 
     // 禁止拷贝（含线程和原子变量）
@@ -126,6 +127,11 @@ public:
         return consumed_count_.load(std::memory_order_relaxed);
     }
 
+    /// 内存池的空闲槽位数（只在 stop() 之后读；用于检查内存池的归还）
+    [[nodiscard]] size_t pool_available() const noexcept {
+        return order_pool_.available();
+    }
+
     /// 消费者侧的延迟记录器（stop() 后可读取 P50/P99）
     [[nodiscard]] LatencyRecorder& latency_recorder() noexcept {
         return latency_recorder_;
@@ -155,7 +161,7 @@ private:
     // 内存池（生产者线程独占 allocate + deallocate）
     // 容量 kOrderPoolCap（128K）：覆盖 10 万笔全挂单最坏情况
     // 使用堆分配（vector），不占用栈空间
-    MemoryPool<Order> order_pool_{kOrderPoolCap};
+    MemoryPool<Order> order_pool_;
 
     // 订单工作队列：Producer 写 → Consumer 读
     SPSCRingBuffer<Order*, kOrderQueueCap>  order_queue_;

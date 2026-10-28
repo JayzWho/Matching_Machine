@@ -10,12 +10,14 @@
  *   4. TradeRingBuffer 成交记录写入正确性
  *   5. 并发压力：大批量订单无崩溃、无挂起
  *   6. 线程钉核：钉在指定 CPU 上照常处理全部订单；CPU 不可用时 start() 抛出且引擎停下
+ *   7. 内存池归还：每轮结束时内存池里只有仍挂在簿上的订单，撤单归还被撤的挂单
  */
 
 #include "matching_engine.h"
 #include "trade_ring_buffer.h"
 #include "order_book.h"
 #include "order.h"
+#include "feed_simulator.h"
 #include <gtest/gtest.h>
 #include <cstring>
 #include <thread>
@@ -169,6 +171,31 @@ TEST(MatchingEnginePipelineTest, LargeBatch_NoHang) {
     EXPECT_EQ(engine.consumed_count(), 100'000u);
 }
 
+// 在单线程上重放流水线生产者生成的同一串订单（FeedSimulator 默认种子相同），
+// 返回最后仍挂在订单簿上的订单数
+static size_t resting_after(size_t order_count, double cancel_ratio) {
+    FeedSimulator sim("BTCUSD", 100'000'000, cancel_ratio);
+    std::vector<Order> orders = sim.generate_random(order_count);
+    TradeRingBuffer<kTradeBufCap> trades;
+    OrderBook book("BTCUSD");
+    for (auto& o : orders) book.add_order_noalloc(&o, trades, [](Order*) {});
+    return book.order_count();
+}
+
+TEST(MatchingEnginePipelineTest, Pool_HoldsOnlyRestingOrdersAfterEachRun) {
+    constexpr size_t kCapacity = 16384, kOrders = 5000;
+    const size_t resting = resting_after(kOrders, 0.2);
+    ASSERT_GT(resting, 0u);
+
+    // 成交和被撤的订单都已归还；每轮从满的内存池开始，所以每轮结束时都相同
+    MatchingEngine engine(kCapacity);
+    for (int run = 0; run < 3; ++run) {
+        engine.start("BTCUSD", 100'000'000, kOrders, 0.2);
+        engine.stop();
+        EXPECT_EQ(engine.pool_available(), kCapacity - resting) << "run " << run;
+    }
+}
+
 // ─── 3b. 线程钉核 ─────────────────────────────────────────────────────────────
 
 TEST(MatchingEnginePipelineTest, PinnedThreads_ProcessAllOrders) {
@@ -277,4 +304,74 @@ TEST(OrderBookNoallocTest, PartialMatch_DeallocateNotCalledForPartialResting) {
     EXPECT_EQ(deallocated[0]->order_id, 2u);  // buy：incoming FILLED
     EXPECT_EQ(sell.filled_qty, 10);
     EXPECT_EQ(sell.status, OrderStatus::PARTIAL);
+}
+
+// 撤单请求：order_id 是要撤的订单
+static Order make_cancel(uint64_t target) {
+    Order o = make_order(target, Side::BUY, 0, 0);
+    o.type = OrderType::CANCEL;
+    return o;
+}
+
+TEST(OrderBookNoallocTest, Cancel_ReturnsCancelledOrderAndRequest) {
+    TradeRingBuffer<64> buf;
+    OrderBook book("BTCUSD");
+    std::vector<Order*> deallocated;
+    auto deallocator = [&](Order* o) { deallocated.push_back(o); };
+
+    Order resting = make_order(1, Side::BUY, 99'000'000, 10);
+    book.add_order_noalloc(&resting, buf, deallocator);
+    ASSERT_TRUE(deallocated.empty());
+
+    Order cancel = make_cancel(1);
+    book.add_order_noalloc(&cancel, buf, deallocator);
+
+    // 被撤的挂单先归还，撤单请求随后
+    ASSERT_EQ(deallocated.size(), 2u);
+    EXPECT_EQ(deallocated[0], &resting);
+    EXPECT_EQ(deallocated[1], &cancel);
+    EXPECT_EQ(book.order_count(), 0u);
+    EXPECT_EQ(book.best_bid(), 0);
+}
+
+TEST(OrderBookNoallocTest, Cancel_ReturnsPartiallyFilledOrder) {
+    TradeRingBuffer<64> buf;
+    OrderBook book("BTCUSD");
+    std::vector<Order*> deallocated;
+    auto deallocator = [&](Order* o) { deallocated.push_back(o); };
+
+    Order sell = make_order(1, Side::SELL, 100'000'000, 20);
+    book.add_order_noalloc(&sell, buf, deallocator);
+    Order buy = make_order(2, Side::BUY, 100'000'000, 10);
+    book.add_order_noalloc(&buy, buf, deallocator);   // buy 完全成交并归还，sell 剩 10
+    ASSERT_EQ(deallocated.size(), 1u);
+
+    Order cancel = make_cancel(1);
+    book.add_order_noalloc(&cancel, buf, deallocator);
+    ASSERT_EQ(deallocated.size(), 3u);
+    EXPECT_EQ(deallocated[1], &sell);
+    EXPECT_EQ(deallocated[2], &cancel);
+    EXPECT_EQ(book.best_ask(), 0);
+}
+
+TEST(OrderBookNoallocTest, Cancel_UnknownOrderReturnsOnlyRequest) {
+    TradeRingBuffer<64> buf;
+    OrderBook book("BTCUSD");
+    std::vector<Order*> deallocated;
+    auto deallocator = [&](Order* o) { deallocated.push_back(o); };
+
+    // 要撤的订单已成交：不在簿上，只归还撤单请求
+    Order sell = make_order(1, Side::SELL, 100'000'000, 10);
+    Order buy = make_order(2, Side::BUY, 100'000'000, 10);
+    book.add_order_noalloc(&sell, buf, deallocator);
+    book.add_order_noalloc(&buy, buf, deallocator);
+    deallocated.clear();
+
+    Order cancel_filled = make_cancel(1);
+    Order cancel_unknown = make_cancel(99);
+    book.add_order_noalloc(&cancel_filled, buf, deallocator);
+    book.add_order_noalloc(&cancel_unknown, buf, deallocator);
+    ASSERT_EQ(deallocated.size(), 2u);
+    EXPECT_EQ(deallocated[0], &cancel_filled);
+    EXPECT_EQ(deallocated[1], &cancel_unknown);
 }

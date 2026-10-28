@@ -171,10 +171,7 @@ each, do not compare them between versions of the code:
 
 The pipeline throughput is comparable through launch medians. The first
 repetition in a launch pays a one-time cost of the process, which is why the
-recorders mark the first repetition of every benchmark as a warm-up. Google
-Benchmark's own warm-up (`--benchmark_min_warmup_time`) is not a substitute: it
-runs the pipeline on one engine many times, which exhausts the engine's memory
-pool and hangs.
+recorders mark the first repetition of every benchmark as a warm-up.
 
 ## Known limits
 
