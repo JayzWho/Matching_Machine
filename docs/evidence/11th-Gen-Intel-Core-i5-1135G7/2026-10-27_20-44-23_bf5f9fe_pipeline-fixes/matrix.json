@@ -1,0 +1,42 @@
+[
+  {
+    "name": "spsc-before",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c0/bench_matching_engine",
+    "filter": "BM_Pipeline_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "spsc-pinned",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c1/bench_matching_engine",
+    "filter": "BM_Pipeline_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "spsc-pinned-pool",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c2/bench_matching_engine",
+    "filter": "BM_Pipeline_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "mutex-before",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c0/bench_baseline_mutex",
+    "filter": "BM_MutexPipeline_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "mutex-pinned",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c1/bench_baseline_mutex",
+    "filter": "BM_MutexPipeline_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  }
+]

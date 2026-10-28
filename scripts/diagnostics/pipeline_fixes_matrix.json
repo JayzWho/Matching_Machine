@@ -1,0 +1,7 @@
+[
+  {"name": "spsc-before", "binary": "build/variants/c0/bench_matching_engine", "filter": "BM_Pipeline_"},
+  {"name": "spsc-pinned", "binary": "build/variants/c1/bench_matching_engine", "filter": "BM_Pipeline_"},
+  {"name": "spsc-pinned-pool", "binary": "build/variants/c2/bench_matching_engine", "filter": "BM_Pipeline_"},
+  {"name": "mutex-before", "binary": "build/variants/c0/bench_baseline_mutex", "filter": "BM_MutexPipeline_"},
+  {"name": "mutex-pinned", "binary": "build/variants/c1/bench_baseline_mutex", "filter": "BM_MutexPipeline_"}
+]
