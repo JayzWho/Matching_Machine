@@ -3,7 +3,9 @@
 measurement mode, with telemetry showing what else used the measurement cores.
 
 Vocabulary
-    repetition  one Google Benchmark repetition inside a process
+    repetition  one Google Benchmark repetition inside a process; the first
+                repetition of each benchmark in a launch is a warm-up, kept in
+                the raw data and in samples.csv but left out of the statistics
     launch      one execution of one benchmark binary
     round       one launch of each binary, in an order that rotates per round
     session     one `setup` ... `restore` span of measurement mode
@@ -24,10 +26,11 @@ mode itself, with exactly `sudo -n /usr/local/sbin/mm-bench-env setup` and
 `... restore`. --unpinned skips both and marks the result INVALID.
 
 Output: docs/evidence/<cpu>/<date>_<commit>_<label>/
-    samples.csv    one row per repetition
+    samples.csv    one row per repetition; `warmup` is 1 for a warm-up
     launches.csv   one row per launch: validity checks and interference telemetry
     intervals.csv  one row per benchmark per launch: wall time, CPU time, run-queue wait
-    latency.csv    the percentiles printed by the two latency-report benchmarks
+    latency.csv    the percentiles printed by the two latency-report benchmarks,
+                   with `warmup` as in samples.csv
     env.json       design, binaries, environment before and after each session
     raw.tar.gz     every raw file: Google Benchmark JSON, console output, setup output
 
@@ -59,6 +62,11 @@ BINARIES = (("bench_order_book", "solo"), ("bench_spsc_ring_buffer", "pair"),
             ("bench_matching_engine", "pair"), ("bench_baseline_mutex", "pair"))
 BUILD_INPUTS = ("CMakeLists.txt", "src", "include", "benchmarks", "tests")
 AGGREGATE = re.compile(r"_(mean|median|stddev|cv)$")
+# The first repetition of every benchmark in a launch pays one-time costs of
+# the process: in the variance-sources study, the pipeline throughput at
+# 10,000 orders was 41% slower in it. It is recorded and marked, and the
+# report scripts leave it out.
+WARMUP_REPETITIONS = 1
 IRQ_KINDS = ("LOC", "RES", "CAL", "TLB", "NMI", "PMI", "TRM")
 SOFTIRQ_KINDS = ("TIMER", "SCHED", "RCU", "HRTIMER", "NET_RX", "NET_TX", "BLOCK", "TASKLET")
 
@@ -408,6 +416,11 @@ def samples(json_path):
             for b in data["benchmarks"] if b["run_type"] == "iteration"]
 
 
+def warmup(repetition):
+    """1 for a warm-up repetition, else 0."""
+    return int(repetition < WARMUP_REPETITIONS)
+
+
 def latency_reports(out):
     """Per printed latency report: {label: TSC ticks}. The source prints the
     unit as "cycles"; RDTSC returns ticks of the timestamp counter."""
@@ -457,6 +470,7 @@ class Study:
             "label": o.label, "commit": sha, "build_inputs_dirty": dirty,
             "measurement_mode": not o.unpinned, "smoke": o.smoke,
             "design": {"sessions": o.sessions, "rounds_per_session": o.rounds, "repetitions": o.repetitions,
+                       "warmup_repetitions": WARMUP_REPETITIONS,
                        "conditions": o.conditions, "extra_benchmark_args": o.benchmark_args},
             "binaries": {n: hashlib.sha256((BUILD / n).read_bytes()).hexdigest() for n, _ in BINARIES},
             "binaries_built": {n: time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime((BUILD / n).stat().st_mtime))
@@ -525,15 +539,18 @@ class Study:
         self.rows["launches"].append({**key, "position": position, "cores": " ".join(map(str, cores)),
                                       "user_tasks_moved": moved, **record})
         for name, rep, real, cpu, iters in samples(self.raw / f"{stem}.json"):
-            self.rows["samples"].append({**key, "benchmark": name, "repetition": rep,
+            self.rows["samples"].append({**key, "benchmark": name, "repetition": rep, "warmup": warmup(rep),
                                          "real_time_ns": repr(real), "cpu_time_ns": repr(cpu), "iterations": iters})
         for name, wall, cpu, waited in intervals(out, marks):
             self.rows["intervals"].append({**key, "benchmark": name, "wall_s": round(wall, 4), "cpu_s": round(cpu, 4),
                                            "cpu_per_wall": round(cpu / wall, 4) if wall > 0 else "",
                                            "waited_ms": round(waited, 3)})
+        # Each binary has one latency-report benchmark of one iteration, so
+        # report i is printed by repetition i.
         for i, report in enumerate(latency_reports(out)):
             for label, ticks in report.items():
-                self.rows["latency"].append({**key, "report": i, "percentile": label, "tsc_ticks": ticks})
+                self.rows["latency"].append({**key, "report": i, "warmup": warmup(i), "percentile": label,
+                                             "tsc_ticks": ticks})
 
     def leave(self, env=None):
         """Leave measurement mode, then return every task to its baseline affinity.
@@ -588,7 +605,7 @@ def main():
     p.add_argument("--label", default="control")
     p.add_argument("--sessions", type=int, default=4)
     p.add_argument("--rounds", type=int, default=8, help="rounds per session")
-    p.add_argument("--repetitions", type=int, default=5)
+    p.add_argument("--repetitions", type=int, default=6, help="per benchmark and launch, the first a warm-up")
     p.add_argument("--conditions", default="shared,cleared")
     p.add_argument("--warmup", type=int, default=5, help="seconds of discarded warm-up per session")
     p.add_argument("--unpinned", action="store_true", help="do not enter measurement mode (result INVALID)")
@@ -600,6 +617,8 @@ def main():
         seen, changed, failed = apply_affinity(json.loads(Path(o.restore_affinity).read_text()))
         print(f"{seen} tasks, {changed} changed, {failed} not changeable")
         return
+    if o.repetitions <= WARMUP_REPETITIONS:
+        die(f"--repetitions must exceed the {WARMUP_REPETITIONS} warm-up repetition")
     o.conditions = o.conditions.split(",")
     if not set(o.conditions) <= {"shared", "cleared"}:
         die("--conditions takes shared and cleared")

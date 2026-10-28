@@ -7,6 +7,7 @@
 #include "trade_ring_buffer.h"
 #include "feed_simulator.h"
 #include "latency_recorder.h"
+#include "thread_placement.h"
 
 #include <vector>
 #include <string_view>
@@ -30,7 +31,7 @@ inline constexpr size_t kReturnQueueCap = 4096;
 /// 内存池默认容量（Order 对象槽位数）
 /// 最坏情况：order_count 笔订单全部挂单无成交，需 = order_count。
 /// 128K 可覆盖 10 万笔测试，并留有余量应对极端挂单堆积场景。
-/// MemoryPool 现已改为堆分配（vector），此常量仅作为 start() 未显式指定时的默认值。
+/// MemoryPool 现已改为堆分配（vector），此常量是构造函数未指定容量时的默认值。
 inline constexpr size_t kOrderPoolCap   = 131072;
 
 /**
@@ -64,7 +65,8 @@ inline constexpr size_t kOrderPoolCap   = 131072;
  */
 class MatchingEngine {
 public:
-    MatchingEngine() = default;
+    /// @param pool_capacity 内存池的 Order 槽位数（测试可用小容量）
+    explicit MatchingEngine(size_t pool_capacity = kOrderPoolCap) : order_pool_(pool_capacity) {}
     ~MatchingEngine();
 
     // 禁止拷贝（含线程和原子变量）
@@ -98,11 +100,14 @@ public:
      * @param base_price   基准价格（整数定价）
      * @param order_count  本次运行的订单总量（0 表示无限，直到 stop() 被调用）
      * @param cancel_ratio 撤单比例 [0.0, 1.0]，传给 FeedSimulator
+     * @param cpus         生产者、消费者线程各自钉在哪个 CPU（创建时即生效）；
+     *                     默认 {-1, -1}：不钉核，由调度器摆放
      */
     void start(std::string_view symbol,
                int64_t         base_price,
                size_t          order_count  = 100'000,
-               double          cancel_ratio = 0.2);
+               double          cancel_ratio = 0.2,
+               ThreadCpus      cpus         = {});
 
     /**
      * @brief 停止流水线，等待双线程退出
@@ -120,6 +125,11 @@ public:
     /// 消费者已处理的订单总数（原子读，近似值）
     [[nodiscard]] size_t consumed_count() const noexcept {
         return consumed_count_.load(std::memory_order_relaxed);
+    }
+
+    /// 内存池的空闲槽位数（只在 stop() 之后读；用于检查内存池的归还）
+    [[nodiscard]] size_t pool_available() const noexcept {
+        return order_pool_.available();
     }
 
     /// 消费者侧的延迟记录器（stop() 后可读取 P50/P99）
@@ -151,7 +161,7 @@ private:
     // 内存池（生产者线程独占 allocate + deallocate）
     // 容量 kOrderPoolCap（128K）：覆盖 10 万笔全挂单最坏情况
     // 使用堆分配（vector），不占用栈空间
-    MemoryPool<Order> order_pool_{kOrderPoolCap};
+    MemoryPool<Order> order_pool_;
 
     // 订单工作队列：Producer 写 → Consumer 读
     SPSCRingBuffer<Order*, kOrderQueueCap>  order_queue_;
@@ -165,8 +175,8 @@ private:
     // 端到端延迟记录器（Consumer 线程写，stop() 后 report）
     LatencyRecorder latency_recorder_{200'000};
 
-    std::thread producer_thread_;
-    std::thread consumer_thread_;
+    PinnedThread producer_thread_;
+    PinnedThread consumer_thread_;
 
     // running_：流水线是否在运行（start/stop 控制）
     std::atomic<bool> running_{false};

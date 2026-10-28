@@ -24,6 +24,8 @@
  *
  * 注意：
  *   - 此文件完全独立，不修改 src/ 或 include/ 中的任何代码
+ *   - 线程摆法与 bench_matching_engine 相同：进程正好能用两个 CPU 时，生产者钉在编号小的、
+ *     消费者钉在编号大的上（thread_placement.h），否则不钉核；摆法写在 label 里
  *   - 延迟单位与 SPSC 版本完全一致（RDTSC 时钟周期 + 2.494 GHz 换算）
  */
 
@@ -33,6 +35,7 @@
 #include "order.h"           // Order, Trade, Side, OrderType, OrderStatus
 #include "feed_simulator.h"  // FeedSimulator::generate_random
 #include "latency_recorder.h" // LatencyRecorder::now(), report()
+#include "thread_placement.h" // ThreadCpus, PinnedThread, allowed_cpu_pair()
 
 #include <map>
 #include <deque>
@@ -286,11 +289,12 @@ public:
     MutexMatchingEngine(const MutexMatchingEngine&) = delete;
     MutexMatchingEngine& operator=(const MutexMatchingEngine&) = delete;
 
-    /// 启动双线程流水线，处理 order_count 笔订单
+    /// 启动双线程流水线，处理 order_count 笔订单；cpus 与 MatchingEngine::start 相同
     void start(std::string_view symbol,
                int64_t         base_price,
                size_t          order_count,
-               double          cancel_ratio = 0.2) {
+               double          cancel_ratio = 0.2,
+               me::ThreadCpus  cpus         = {}) {
         if (running_.load()) throw std::runtime_error("already running");
 
         // 重置状态
@@ -302,16 +306,28 @@ public:
         latency_recorder_.reset();
         running_.store(true);
 
-        // 启动消费者（先起，避免生产者 push 时消费者未 wait）
-        consumer_thread_ = std::thread([this, sym = std::string(symbol)] {
-            consumer_loop(sym);
-        });
+        try {
+            // 启动消费者（先起，避免生产者 push 时消费者未 wait）
+            consumer_thread_ = me::PinnedThread(cpus.consumer, [this, sym = std::string(symbol)] {
+                consumer_loop(sym);
+            });
 
-        // 启动生产者（传入 symbol/base_price/cancel_ratio，线程内流式生成）
-        producer_thread_ = std::thread([this, sym = std::string(symbol),
-                                        base_price, order_count, cancel_ratio] {
-            producer_loop(sym, base_price, order_count, cancel_ratio);
-        });
+            // 启动生产者（传入 symbol/base_price/cancel_ratio，线程内流式生成）
+            producer_thread_ = me::PinnedThread(cpus.producer, [this, sym = std::string(symbol),
+                                                                base_price, order_count, cancel_ratio] {
+                producer_loop(sym, base_price, order_count, cancel_ratio);
+            });
+        } catch (...) {
+            // 线程没起来：与 MatchingEngine 相同，让已起来的消费者退出后再抛出
+            {
+                std::lock_guard<std::mutex> lk(queue_mtx_);
+                producer_done_.store(true, std::memory_order_release);
+            }
+            cv_.notify_all();
+            if (consumer_thread_.joinable()) consumer_thread_.join();
+            running_.store(false);
+            throw;
+        }
     }
 
     /// 等待两线程完成
@@ -404,9 +420,9 @@ private:
     std::atomic<bool>        producer_done_{false};
     std::atomic<bool>        running_{false};
 
-    // 线程句柄
-    std::thread producer_thread_;
-    std::thread consumer_thread_;
+    // 线程句柄（与 std::thread 同样大小，对象布局不变）
+    me::PinnedThread producer_thread_;
+    me::PinnedThread consumer_thread_;
 
     // 延迟记录器
     me::LatencyRecorder latency_recorder_{100'000};
@@ -414,6 +430,12 @@ private:
 
 
 // ─── 3. Benchmark：吞吐量 ────────────────────────────────────────────────────
+
+// 线程摆法，写进 label（与 bench_matching_engine.cpp 相同）
+static std::string placement(const me::ThreadCpus& cpus) {
+    if (cpus.producer < 0) return "unpinned";
+    return "producer=cpu" + std::to_string(cpus.producer) + " consumer=cpu" + std::to_string(cpus.consumer);
+}
 //
 // 结构与 bench_matching_engine.cpp 中 BM_Pipeline_Throughput 完全对称，
 // 便于 real_time 直接对比。
@@ -421,19 +443,20 @@ private:
 static void BM_MutexPipeline_Throughput(benchmark::State& state) {
     const size_t order_count = static_cast<size_t>(state.range(0));
     constexpr double cancel_ratio = 0.2;
+    const me::ThreadCpus cpus = me::allowed_cpu_pair();
 
     // 对象固定从缓存行开头开始。否则栈地址随机化让它每次启动落在不同偏移，
     // 两个线程共用的字段如何分布在缓存行上随之改变，吞吐在两档之间跳动。
     alignas(64) MutexMatchingEngine engine;
     for (auto _ : state) {
-        engine.start("BTCUSD", 100'000'000LL, order_count, cancel_ratio);
+        engine.start("BTCUSD", 100'000'000LL, order_count, cancel_ratio, cpus);
         engine.stop();
     }
 
     state.SetItemsProcessed(
         state.iterations() * static_cast<int64_t>(order_count)
     );
-    state.SetLabel("orders=" + std::to_string(order_count));
+    state.SetLabel("orders=" + std::to_string(order_count) + " " + placement(cpus));
 }
 
 BENCHMARK(BM_MutexPipeline_Throughput)
@@ -441,7 +464,8 @@ BENCHMARK(BM_MutexPipeline_Throughput)
     ->Arg(50'000)
     ->Arg(100'000)
     ->Unit(benchmark::kMillisecond)
-    ->Iterations(3);
+    ->Iterations(3)
+    ->UseRealTime();   // 与 BM_Pipeline_Throughput 相同：主线程只在 join 里等待，按墙钟时间算吞吐
 
 
 // ─── 4. Benchmark：延迟报告（P50 / P99）─────────────────────────────────────
@@ -449,10 +473,11 @@ BENCHMARK(BM_MutexPipeline_Throughput)
 // 与 BM_Pipeline_LatencyReport 对称，运行 100K 订单后输出完整延迟百分位。
 
 static void BM_MutexPipeline_LatencyReport(benchmark::State& state) {
+    const me::ThreadCpus cpus = me::allowed_cpu_pair();
     alignas(64) MutexMatchingEngine engine;  // 与吞吐测试相同，固定对象位置
     for (auto _ : state) {
         state.PauseTiming();
-        engine.start("BTCUSD", 100'000'000LL, 100'000, 0.2);
+        engine.start("BTCUSD", 100'000'000LL, 100'000, 0.2, cpus);
         engine.stop();
         state.ResumeTiming();
 
@@ -461,6 +486,7 @@ static void BM_MutexPipeline_LatencyReport(benchmark::State& state) {
         const_cast<me::LatencyRecorder&>(engine.latency_recorder()).report(/*cpu_ghz=*/2.494);
         std::printf("\n");
     }
+    state.SetLabel(placement(cpus));
 }
 
 BENCHMARK(BM_MutexPipeline_LatencyReport)
