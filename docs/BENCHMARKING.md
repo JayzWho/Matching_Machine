@@ -12,7 +12,7 @@ All four are built from `benchmarks/` by the Release configuration.
 | Binary | Benchmarks | Threads | Runs on |
 |---|---|---|---|
 | `bench_order_book` | Add, match, sweep, cancel and mixed workload on the order book (8) | 1 | the first measurement core |
-| `bench_spsc_ring_buffer` | Ring buffer push and pop (2); producer to consumer over the SPSC ring buffer (3) and over a mutex queue (2) | 1, then 2 | both measurement cores |
+| `bench_spsc_ring_buffer` | Ring buffer push and pop (2); producer to consumer over the SPSC ring buffer (3) and over a mutex queue (2), each on 16 memory regions in both thread placements | 1, then 2 | both measurement cores: each two-thread benchmark pins the producer to one and the consumer to the other, in both assignments |
 | `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report | 2 | both measurement cores: the producer thread on the lower-numbered, the consumer on the higher |
 | `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report | 2 | as `bench_matching_engine` |
 
@@ -179,8 +179,7 @@ recorders mark the first repetition of every benchmark as a warm-up.
   cores. Doing so needs a cpuset set up by `bench_env.sh setup`.
 - The pipeline benchmarks pin each of their two threads to one measurement
   core when the thread is created, and print the placement in each benchmark's
-  label. The producer-to-consumer benchmarks of `bench_spsc_ring_buffer` still
-  leave their two threads to the scheduler.
+  label. They use one placement: the producer on the lower-numbered core.
 - Latency is reported in ticks of the processor's timestamp counter (TSC).
   `capture_env.sh` measures the counter's frequency against `CLOCK_MONOTONIC`
   before and after every session and records it in `env.json` under `tsc`;
