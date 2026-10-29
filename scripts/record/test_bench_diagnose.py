@@ -49,10 +49,27 @@ class DiagnosticTests(unittest.TestCase):
             with patch.object(recorder, "launch", return_value=(b"", [], {"exit_status": 0})), \
                  patch.object(recorder, "samples", return_value=sampled), \
                  patch.object(recorder, "intervals", return_value=[]), \
-                 patch.object(recorder, "latency_reports", return_value=[{"P50": 7}] * 3):
+                 patch.object(recorder, "latency_reports",
+                              return_value=[(q, i, {"P50": 7}) for i in range(3) for q in ("queue", "service")]):
                 study.one(1, 1, 1, condition, [1, 3], {1, 3}, (0, 0, 0))
             self.assertEqual([row["warmup"] for row in study.rows["samples"]], [1, 0, 0])
-            self.assertEqual([row["warmup"] for row in study.rows["latency"]], [1, 0, 0])
+            self.assertEqual([(row["quantity"], row["warmup"]) for row in study.rows["latency"]],
+                             [("queue", 1), ("service", 1), ("queue", 0), ("service", 0),
+                              ("queue", 0), ("service", 0)])
+
+    def test_latency_reports_split_by_quantity(self):
+        report = ("=== Latency Report: {} (100000 samples, TSC ticks) ===\n"
+                  "P50  :    {} ticks\nMax  :   {} ticks\n")
+        out = ("--- Pipeline Latency Report (100K orders) ---\n" + report.format("queue", 900000, 990000)
+               + report.format("service", 600, 41000) + "  (Trades produced: 7)\n\n"
+               + "BM_Pipeline_LatencyReport/iterations:1  1.0 ms\n"
+               + report.format("queue", 910000, 995000) + report.format("service", 610, 42000) + "\n")
+        self.assertEqual(recorder.latency_reports(out.encode()), [
+            ("queue", 0, {"P50": 900000, "Max": 990000}), ("service", 0, {"P50": 600, "Max": 41000}),
+            ("queue", 1, {"P50": 910000, "Max": 995000}), ("service", 1, {"P50": 610, "Max": 42000})])
+        before = "=== Latency Report (100000 samples) ===\nP50  : 3140000 cycles / 1259 ns\n\n"
+        self.assertEqual(recorder.latency_reports(before.encode() * 2),
+                         [("end-to-end", 0, {"P50": 3140000}), ("end-to-end", 1, {"P50": 3140000})])
 
     def test_single_repetition_rejected(self):
         result = subprocess.run([sys.executable, "-B", str(Path(diagnose.__file__)), "--matrix", "unused.json",
