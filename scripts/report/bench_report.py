@@ -38,11 +38,19 @@ equals the observed one.
 
 A benchmark is marked as moving between launches when p is below 0.001, which
 keeps the chance of a false mark near 5% across all benchmarks of a study.
+
+The producer-to-consumer benchmarks of bench_spsc_ring_buffer run every
+instance on one of 16 memory regions in each of two thread placements, and get
+a section of their own: the int64 ring by the level of each of its two states
+and the share of slow instances, the Order ring and the mutex queue by the
+median over a launch's instances.
 """
 import argparse
 import csv
 import json
+import math
 import random
+import re
 import statistics as st
 import sys
 from collections import defaultdict
@@ -74,6 +82,10 @@ RATIO = (("bench_matching_engine", "BM_Pipeline_Throughput/100000/iterations:3")
 # The benchmarks whose launch medians are listed round by round.
 ROUND_BY_ROUND = ("BM_SPSC_ProducerConsumer/100000/real_time", "BM_Mutex_ProducerConsumer/100000/real_time",
                   "BM_Pipeline_Throughput/100000/iterations:3", "BM_MutexPipeline_Throughput/100000/iterations:3")
+# Producer-to-consumer instances: BM_<name>/<items>/block:<region>/placement:<0 or 1>/...
+SAMPLED = re.compile(r"^(BM_\w+)/(\d+)/block:(\d+)/placement:(\d+)/")
+# The benchmark whose instances settle in one of two states, reported by tier.
+TIERED = "BM_SPSC_ProducerConsumer"
 FOREIGN_LIMIT = 50.0    # ms of foreign CPU time per second above which a launch counts as disturbed
 STRONG = 0.7            # |Spearman rho| from which a telemetry series is listed
 # Launch telemetry tested against the launch medians, as (label, value of a launches.csv row).
@@ -102,6 +114,70 @@ def unit_note(env):
         return "not converted to time because the counter's frequency has not been calibrated."
     return (f"not converted to time. Calibrated against CLOCK_MONOTONIC before and after each session, the "
             f"counter ran at {min(ghz):.6f} to {max(ghz):.6f} GHz ({len(ghz)} calibrations, env.json).")
+
+
+def sampled_instance(name):
+    """(benchmark, items, region, placement) of a producer-to-consumer instance, else None."""
+    m = SAMPLED.match(name)
+    return (m[1], int(m[2]), int(m[3]), int(m[4])) if m else None
+
+
+def tier_threshold(values):
+    """Where per-item times split into a fast and a slow tier: Otsu's method on
+    their logarithms, i.e. the split that maximizes the variance between the
+    two groups, which a single outlier hardly moves. Returns (threshold, gap),
+    the gap being the fastest slow value divided by the slowest fast one, or
+    None when all values are equal."""
+    logs = sorted(math.log(v) for v in values)
+    total, left, best, at = sum(logs), 0.0, -1.0, None
+    for i in range(1, len(logs)):
+        left += logs[i - 1]
+        if logs[i] == logs[i - 1]:
+            continue
+        w0, w1 = i / len(logs), (len(logs) - i) / len(logs)
+        between = w0 * w1 * (left / i - (total - left) / (len(logs) - i)) ** 2
+        if between > best:
+            best, at = between, i
+    if at is None:
+        return None
+    low, high = math.exp(logs[at - 1]), math.exp(logs[at])
+    return math.sqrt(low * high), high / low
+
+
+def tier_summary(launches):
+    """The two tiers of the int64 ring. `launches` maps a launch to
+    {(region, placement): ns per item}. Returns None when the values do not
+    split, else a dict: threshold and gap; per tier the launch levels (median
+    of a launch's instances in that tier); the share of slow instances by
+    placement over all launches; and the launches with a region slow in both
+    placements."""
+    split = tier_threshold([v for cells in launches.values() for v in cells.values()])
+    if split is None:
+        return None
+    threshold, gap = split
+    fast, slow, share, both = [], [], defaultdict(list), 0
+    for cells in launches.values():
+        tier = {cell: v > threshold for cell, v in cells.items()}
+        fast += [median([v for cell, v in cells.items() if not tier[cell]])] if not all(tier.values()) else []
+        slow += [median([v for cell, v in cells.items() if tier[cell]])] if any(tier.values()) else []
+        for (region, placement), is_slow in tier.items():
+            share[placement].append(is_slow)
+        both += any(tier.get((region, 0)) and tier.get((region, 1)) for region, _ in cells)
+    return {"threshold": threshold, "gap": gap, "fast": fast, "slow": slow,
+            "share": {p: sum(v) / len(v) for p, v in sorted(share.items())}, "both": both}
+
+
+def spread_summary(launches):
+    """The Order ring and the mutex queue: per launch the median and the
+    quartiles of its instances' ns per item, as three lists over launches."""
+    meds, q1s, q3s = [], [], []
+    for cells in launches.values():
+        values = list(cells.values())
+        q1, _, q3 = st.quantiles(values, n=4, method="inclusive")
+        meds.append(median(values))
+        q1s.append(q1)
+        q3s.append(q3)
+    return meds, q1s, q3s
 
 
 def latency_groups(rows):
@@ -284,7 +360,7 @@ def main():
     interval = {(r["condition"], r["binary"], r["benchmark"], int(r["session"]), int(r["round"])): r
                 for r in read(opts.study / "intervals.csv")}
 
-    keys = [k for k in next(iter(reps.values())) if NOT_TIMED not in k[1]]
+    keys = [k for k in next(iter(reps.values())) if NOT_TIMED not in k[1] and not sampled_instance(k[1])]
     families = [(title, threads, [k for k in keys if member(*k)]) for title, threads, member in FAMILIES]
     orphans = [k[1] for k in keys if not any(k in group for _, _, group in families)]
     if orphans:
@@ -404,6 +480,50 @@ def main():
                 out += table(["Benchmark", "Median", "CV inside a launch", "Middle half of launch medians",
                               "Spread of launch medians", "Expected from scatter", "Launches beyond scatter",
                               "p (launches)", "p (sessions)", "p (trend)"], rows)
+
+    # ── producer to consumer over a queue ──
+    # instances[(condition, benchmark, items)][launch][(region, placement)] = ns per item
+    instances = defaultdict(lambda: defaultdict(dict))
+    for c in conditions:
+        for (binary, name), by_launch in reps[c].items():
+            found = sampled_instance(name)
+            if found:
+                benchmark, items, region, placement = found
+                for launch, values in by_launch.items():
+                    instances[(c, benchmark, items)][launch][(region, placement)] = median(values) / items
+    if instances:
+        order = sorted(instances, key=lambda k: (conditions.index(k[0]), k[1], k[2]))
+        out += ["## Producer to consumer over a queue", "",
+                "Every instance runs on one of 16 memory regions in one of two thread placements (placement 0 puts "
+                "the producer on the lower-numbered CPU), and is represented by the median of its repetitions, in "
+                "ns per item. The int64 ring settles in one of two states, so its instances are split into a fast "
+                "and a slow tier where the logarithms of all of the study's instances split best (Otsu's method); "
+                "the gap is the fastest slow instance divided by the slowest fast one. A launch's level of a tier "
+                "is the median of its instances in that tier. The CV is that of the launch levels or medians.", ""]
+        rows = []
+        for key in order:
+            if key[1] != TIERED:
+                continue
+            s = tier_summary(instances[key])
+            if s is None:
+                continue
+            rows.append([key[0], f"`{key[1]}`", f"{key[2]:,}", f"{s['threshold']:.1f}", f"{s['gap']:.2f}×",
+                         f"{median(s['fast']):.2f}" if s["fast"] else "n/a", pct(cv(s["fast"])),
+                         f"{median(s['slow']):.1f}" if s["slow"] else "n/a", pct(cv(s["slow"])),
+                         *(f"{s['share'].get(p, float('nan')):.2f}" for p in (0, 1)),
+                         f"{s['both']} of {len(instances[key])}"])
+        out += table(["Condition", "Benchmark", "Items", "Threshold, ns", "Gap", "Fast tier, ns", "CV",
+                      "Slow tier, ns", "CV", "Slow share, placement 0", "Slow share, placement 1",
+                      "Launches with a region slow in both placements"], rows, right_from=2)
+        rows = []
+        for key in order:
+            if key[1] == TIERED:
+                continue
+            meds, q1s, q3s = spread_summary(instances[key])
+            rows.append([key[0], f"`{key[1]}`", f"{key[2]:,}", len(meds), f"{median(meds):.1f}", pct(cv(meds)),
+                         pct(spread(meds)), f"{median(q1s):.1f} to {median(q3s):.1f}"])
+        out += table(["Condition", "Benchmark", "Items", "Launches", "Median of launch medians, ns", "CV",
+                      "Spread", "Quartiles over the instances, median over launches, ns"], rows, right_from=2)
 
     # ── round by round ──
     listed = [k for k in keys if base_name(k[1]) in ROUND_BY_ROUND]
