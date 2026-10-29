@@ -99,13 +99,17 @@ size_t OrderBook::order_count() const noexcept {
     return order_index_.size();
 }
 
+size_t OrderBook::index_capacity() const noexcept {
+    return order_index_.capacity();
+}
+
 void OrderBook::clear() noexcept {
     bid_levels_.clear();
     ask_levels_.clear();
-    order_index_.clear();
+    // 不用 order_index_.clear()：absl 的 clear() 在容量达到 128 时释放整张表，
+    // 之后的插入从 1 个槽位重新长大。整段 erase 清空元素但保留已分配的槽位。
+    order_index_.erase(order_index_.begin(), order_index_.end());
     trade_id_counter_ = 0;
-    // 注意：不调用 order_index_.reserve()，保留已分配的桶内存，
-    // 避免反复 reserve 导致不必要的堆操作。
 }
 
 // ── 核心撮合逻辑（价格-时间优先） ─────────────────────────────────────────────

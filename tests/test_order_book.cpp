@@ -2,6 +2,7 @@
 #include "matching_engine.h"
 #include <gtest/gtest.h>
 #include <cstring>
+#include <vector>
 
 using namespace me;
 
@@ -200,6 +201,25 @@ TEST_F(OrderBookTest, FillRemovesLevelLeftWithOnlyCancelledOrders) {
     ASSERT_EQ(trades.size(), 1u);
     EXPECT_EQ(trades[0].sell_order_id, first.order_id);
     EXPECT_EQ(book->best_ask(), 101'000'000);
+}
+
+// ── 清空测试 ──────────────────────────────────────────────────────────────────
+
+TEST_F(OrderBookTest, ClearKeepsIndexCapacity) {
+    // 清空后订单索引的槽位数应与新建的订单簿相同，之后的插入不必重新长大
+    const size_t fresh = book->index_capacity();
+    std::vector<Order> orders;
+    orders.reserve(1000);
+    for (int i = 0; i < 1000; ++i) {
+        orders.push_back(make_order(Side::BUY, 99'000'000 - i * 100, 1));
+        book->add_order(&orders.back());
+    }
+
+    book->clear();
+
+    EXPECT_EQ(book->order_count(), 0u);
+    EXPECT_EQ(book->best_bid(), 0);
+    EXPECT_EQ(book->index_capacity(), fresh);
 }
 
 // ── 回调测试（已迁移为 TradeRingBuffer 验证） ──────────────────────────────────
