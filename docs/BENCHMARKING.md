@@ -138,6 +138,14 @@ quiet when launches do not differ and finds both a gradual difference and a
 two-level one. A single launch that is slower than the rest shows in the spread
 and in the count of launches beyond scatter more reliably than in p.
 
+The producer-to-consumer benchmarks of `bench_spsc_ring_buffer` have 32
+instances each, one per memory region and thread placement, and a section of
+their own. The int64 ring settles in one of two states, so its instances are
+split into a fast and a slow tier where the logarithms of all of the study's
+instances split best; each launch then gives the level of each tier and the
+share of slow instances in each placement. The Order ring and the mutex queue
+are given by the median and the quartiles of a launch's instances.
+
 Because launches differ, a comparison between two versions of the code needs
 several launches of each, and compares their launch medians. The scatter of the
 repetitions inside one launch says nothing about the next launch.
