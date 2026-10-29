@@ -12,9 +12,9 @@ All four are built from `benchmarks/` by the Release configuration.
 | Binary | Benchmarks | Threads | Runs on |
 |---|---|---|---|
 | `bench_order_book` | Add, match, sweep, cancel and mixed workload on the order book (8) | 1 | the first measurement core |
-| `bench_spsc_ring_buffer` | Ring buffer push and pop (2); producer to consumer over the SPSC ring buffer (3) and over a mutex queue (2) | 1, then 2 | both measurement cores |
-| `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report | 2 | both measurement cores: the producer thread on the lower-numbered, the consumer on the higher |
-| `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report | 2 | as `bench_matching_engine` |
+| `bench_spsc_ring_buffer` | Ring buffer push and pop (2); producer to consumer over the SPSC ring buffer (3) and over a mutex queue (2), each on 16 memory regions in both thread placements | 1, then 2 | both measurement cores: each two-thread benchmark pins the producer to one and the consumer to the other, in both assignments |
+| `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report of queue time and service time | 2 | both measurement cores: the producer thread on the lower-numbered, the consumer on the higher |
+| `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report of queue time and service time | 2 | as `bench_matching_engine` |
 
 These programs still contain the defects described in `AUDIT.md`. A recording
 of them in that state is called a **control**: it exists so that a later fix
@@ -138,6 +138,14 @@ quiet when launches do not differ and finds both a gradual difference and a
 two-level one. A single launch that is slower than the rest shows in the spread
 and in the count of launches beyond scatter more reliably than in p.
 
+The producer-to-consumer benchmarks of `bench_spsc_ring_buffer` have 32
+instances each, one per memory region and thread placement, and a section of
+their own. The int64 ring settles in one of two states, so its instances are
+split into a fast and a slow tier where the logarithms of all of the study's
+instances split best; each launch then gives the level of each tier and the
+share of slow instances in each placement. The Order ring and the mutex queue
+are given by the median and the quartiles of a launch's instances.
+
 Because launches differ, a comparison between two versions of the code needs
 several launches of each, and compares their launch medians. The scatter of the
 repetitions inside one launch says nothing about the next launch.
@@ -179,12 +187,18 @@ recorders mark the first repetition of every benchmark as a warm-up.
   cores. Doing so needs a cpuset set up by `bench_env.sh setup`.
 - The pipeline benchmarks pin each of their two threads to one measurement
   core when the thread is created, and print the placement in each benchmark's
-  label. The producer-to-consumer benchmarks of `bench_spsc_ring_buffer` still
-  leave their two threads to the scheduler.
+  label. They use one placement: the producer on the lower-numbered core.
 - Latency is reported in ticks of the processor's timestamp counter (TSC).
   `capture_env.sh` measures the counter's frequency against `CLOCK_MONOTONIC`
   before and after every session and records it in `env.json` under `tsc`;
-  the reports do not convert ticks to time yet.
+  the reports do not convert ticks to time yet. Queue time subtracts a reading
+  taken on the producer's core from one taken on the consumer's, which relies
+  on the counters of the cores being synchronized. The kernel compares them as
+  it brings each CPU up and stops using the TSC as its clock source if they
+  differ; `env.json` records the clock source under `tsc`. This has not been
+  verified independently. Only the two latency-report benchmarks take these
+  readings, each between two fences; the fences slow the consumer, so the queue
+  time they report is longer than at the speed the throughput benchmarks run.
 - The timer tick, softirqs and per-CPU kernel threads stay on the measurement
   cores. Removing them needs kernel boot parameters.
 - A study covers one boot. Whether results move across reboots or kernel

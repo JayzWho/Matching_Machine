@@ -102,12 +102,16 @@ public:
      * @param cancel_ratio 撤单比例 [0.0, 1.0]，传给 FeedSimulator
      * @param cpus         生产者、消费者线程各自钉在哪个 CPU（创建时即生效）；
      *                     默认 {-1, -1}：不钉核，由调度器摆放
+     * @param record_latency 记录每笔订单的排队时间和服务时间（queue_latency()、
+     *                     service_latency()）。时间戳前后带栅栏，消费者每笔订单多花
+     *                     几十纳秒，所以默认关闭，测吞吐时保持关闭
      */
     void start(std::string_view symbol,
                int64_t         base_price,
-               size_t          order_count  = 100'000,
-               double          cancel_ratio = 0.2,
-               ThreadCpus      cpus         = {});
+               size_t          order_count    = 100'000,
+               double          cancel_ratio   = 0.2,
+               ThreadCpus      cpus           = {},
+               bool            record_latency = false);
 
     /**
      * @brief 停止流水线，等待双线程退出
@@ -132,9 +136,14 @@ public:
         return order_pool_.available();
     }
 
-    /// 消费者侧的延迟记录器（stop() 后可读取 P50/P99）
-    [[nodiscard]] LatencyRecorder& latency_recorder() noexcept {
-        return latency_recorder_;
+    /// 排队时间：从生产者打时间戳到消费者取出订单（start() 时打开 record_latency 才有采样，stop() 后读取）
+    [[nodiscard]] LatencyRecorder& queue_latency() noexcept {
+        return queue_latency_;
+    }
+
+    /// 服务时间：从消费者取出订单到撮合完成（同上）
+    [[nodiscard]] LatencyRecorder& service_latency() noexcept {
+        return service_latency_;
     }
 
     /// 消费者侧的 TradeRingBuffer（stop() 后可 drain）
@@ -153,10 +162,11 @@ private:
     void producer_loop(std::string_view symbol,
                        int64_t         base_price,
                        size_t          order_count,
-                       double          cancel_ratio);
+                       double          cancel_ratio,
+                       bool            record_latency);
 
     /// 消费者线程主循环
-    void consumer_loop(std::string_view symbol);
+    void consumer_loop(std::string_view symbol, bool record_latency);
 
     // 内存池（生产者线程独占 allocate + deallocate）
     // 容量 kOrderPoolCap（128K）：覆盖 10 万笔全挂单最坏情况
@@ -172,8 +182,9 @@ private:
     // Trade 环形缓冲区（Consumer 线程独占写）
     TradeRingBuffer<kTradeBufCap> trade_buf_;
 
-    // 端到端延迟记录器（Consumer 线程写，stop() 后 report）
-    LatencyRecorder latency_recorder_{200'000};
+    // 排队时间、服务时间的记录器（Consumer 线程写，stop() 后 report）
+    LatencyRecorder queue_latency_{200'000};
+    LatencyRecorder service_latency_{200'000};
 
     PinnedThread producer_thread_;
     PinnedThread consumer_thread_;

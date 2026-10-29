@@ -127,15 +127,26 @@ TEST(TradeRingBufferTest, DrainEmptyIsSafe) {
 
 TEST(MatchingEnginePipelineTest, StartStop_SmallBatch) {
     MatchingEngine engine;
-    // 运行 1000 笔订单，20% 撤单比例
-    engine.start("BTCUSD", 100'000'000, /*order_count=*/1000, /*cancel_ratio=*/0.2);
+    // 运行 1000 笔订单，20% 撤单比例，记录延迟
+    engine.start("BTCUSD", 100'000'000, /*order_count=*/1000, /*cancel_ratio=*/0.2, {}, /*record_latency=*/true);
     engine.stop();
 
     // 消费者应处理了全部订单
     EXPECT_EQ(engine.consumed_count(), 1000u);
 
-    // 延迟记录器应有对应数量的采样
-    EXPECT_EQ(engine.latency_recorder().count(), 1000u);
+    // 每笔订单的排队时间、服务时间各有一个采样
+    EXPECT_EQ(engine.queue_latency().count(), 1000u);
+    EXPECT_EQ(engine.service_latency().count(), 1000u);
+}
+
+TEST(MatchingEnginePipelineTest, LatencyNotRecordedByDefault) {
+    MatchingEngine engine;
+    engine.start("BTCUSD", 100'000'000, /*order_count=*/1000);
+    engine.stop();
+
+    EXPECT_EQ(engine.consumed_count(), 1000u);
+    EXPECT_EQ(engine.queue_latency().count(), 0u);
+    EXPECT_EQ(engine.service_latency().count(), 0u);
 }
 
 TEST(MatchingEnginePipelineTest, StartStop_NotRunningAfterStop) {
