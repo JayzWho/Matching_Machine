@@ -30,13 +30,15 @@ Output: docs/evidence/<cpu>/<date>_<commit>_<label>/
     launches.csv   one row per launch: validity checks and interference telemetry
     intervals.csv  one row per benchmark per launch: wall time, CPU time, run-queue wait
     latency.csv    the percentiles printed by the two latency-report benchmarks,
-                   with `warmup` as in samples.csv
+                   one report per quantity (queue time, service time) and
+                   repetition, with `warmup` as in samples.csv
     env.json       design, binaries, environment before and after each session
     raw.tar.gz     every raw file: Google Benchmark JSON, console output, setup output
 
 scripts/report/bench_report.py turns that directory into tables.
 """
 import argparse
+from collections import Counter
 import csv
 import hashlib
 import json
@@ -62,6 +64,9 @@ BINARIES = (("bench_order_book", "solo"), ("bench_spsc_ring_buffer", "pair"),
             ("bench_matching_engine", "pair"), ("bench_baseline_mutex", "pair"))
 BUILD_INPUTS = ("CMakeLists.txt", "src", "include", "benchmarks", "tests")
 AGGREGATE = re.compile(r"_(mean|median|stddev|cv)$")
+# The header of a printed latency report. Reports printed before the latency
+# was split into queue time and service time name no quantity.
+LATENCY_HEADER = re.compile(r"=== Latency Report(?:: ([\w-]+))? \(\d+ samples(?:, TSC ticks)?\) ===\n")
 # The first repetition of every benchmark in a launch pays one-time costs of
 # the process: in the variance-sources study, the pipeline throughput at
 # 10,000 orders was 41% slower in it. It is recorded and marked, and the
@@ -422,13 +427,20 @@ def warmup(repetition):
 
 
 def latency_reports(out):
-    """Per printed latency report: {label: TSC ticks}. The source prints the
-    unit as "cycles"; RDTSC returns ticks of the timestamp counter."""
-    reports = []
-    for block in re.split(r"=== Latency Report \(\d+ samples\) ===\n", out.decode(errors="replace"))[1:]:
-        found = re.findall(r"^(\w+)\s*:\s*(\d+) cycles", block.split("\n\n")[0], re.M)
+    """Per printed latency report, in order: (quantity, repetition, {label: TSC ticks}).
+
+    Each binary has one latency-report benchmark of one iteration, which prints
+    one report of each quantity per repetition, so the k-th report of a quantity
+    is printed by repetition k. Reports printed before the split are the
+    end-to-end latency and label their TSC ticks "cycles"."""
+    reports, seen = [], Counter()
+    parts = LATENCY_HEADER.split(out.decode(errors="replace"))
+    for quantity, block in zip(parts[1::2], parts[2::2]):
+        found = re.findall(r"^(\w+)\s*:\s*(\d+) (?:ticks|cycles)\b", block.split("\n\n")[0], re.M)
         if found:
-            reports.append({k: int(v) for k, v in found})
+            quantity = quantity or "end-to-end"
+            reports.append((quantity, seen[quantity], {k: int(v) for k, v in found}))
+            seen[quantity] += 1
     return reports
 
 
@@ -545,12 +557,10 @@ class Study:
             self.rows["intervals"].append({**key, "benchmark": name, "wall_s": round(wall, 4), "cpu_s": round(cpu, 4),
                                            "cpu_per_wall": round(cpu / wall, 4) if wall > 0 else "",
                                            "waited_ms": round(waited, 3)})
-        # Each binary has one latency-report benchmark of one iteration, so
-        # report i is printed by repetition i.
-        for i, report in enumerate(latency_reports(out)):
+        for quantity, i, report in latency_reports(out):
             for label, ticks in report.items():
-                self.rows["latency"].append({**key, "report": i, "warmup": warmup(i), "percentile": label,
-                                             "tsc_ticks": ticks})
+                self.rows["latency"].append({**key, "quantity": quantity, "report": i, "warmup": warmup(i),
+                                             "percentile": label, "tsc_ticks": ticks})
 
     def leave(self, env=None):
         """Leave measurement mode, then return every task to its baseline affinity.

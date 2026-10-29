@@ -46,7 +46,8 @@ void MatchingEngine::start(std::string_view symbol,
                            int64_t         base_price,
                            size_t          order_count,
                            double          cancel_ratio,
-                           ThreadCpus      cpus) {
+                           ThreadCpus      cpus,
+                           bool            record_latency) {
     if (running_.load(std::memory_order_acquire)) {
         throw std::runtime_error("MatchingEngine: already running");
     }
@@ -59,19 +60,20 @@ void MatchingEngine::start(std::string_view symbol,
     producer_done_.store(false, std::memory_order_relaxed);
     consumer_done_.store(false, std::memory_order_relaxed);
     consumed_count_.store(0, std::memory_order_relaxed);
-    latency_recorder_.reset();
+    queue_latency_.reset();
+    service_latency_.reset();
     trade_buf_.drain([](const Trade&) {});  // 清空上轮残留的成交记录
     running_.store(true, std::memory_order_release);
 
     // 启动两个线程（先消费者，再生产者，避免生产者推入时消费者未就绪）
     try {
-        consumer_thread_ = PinnedThread(cpus.consumer, [this, sym = std::string(symbol)] {
-            consumer_loop(sym);
+        consumer_thread_ = PinnedThread(cpus.consumer, [this, sym = std::string(symbol), record_latency] {
+            consumer_loop(sym, record_latency);
         });
 
         producer_thread_ = PinnedThread(cpus.producer, [this, sym = std::string(symbol),
-                                                        base_price, order_count, cancel_ratio] {
-            producer_loop(sym, base_price, order_count, cancel_ratio);
+                                                        base_price, order_count, cancel_ratio, record_latency] {
+            producer_loop(sym, base_price, order_count, cancel_ratio, record_latency);
         });
     } catch (...) {
         // 线程没起来（例如 CPU 编号不可用）：让已起来的消费者排空后退出，再把错误交给调用方
@@ -99,7 +101,8 @@ void MatchingEngine::stop() {
 void MatchingEngine::producer_loop(std::string_view symbol,
                                    int64_t         base_price,
                                    size_t          order_count,
-                                   double          cancel_ratio) {
+                                   double          cancel_ratio,
+                                   bool            record_latency) {
     FeedSimulator sim(symbol, base_price, cancel_ratio);
 
     size_t pushed = 0;
@@ -118,8 +121,9 @@ void MatchingEngine::producer_loop(std::string_view symbol,
 
         // ② 直接在内存池槽位上生成订单字段，零拷贝
         sim.generate_into(slot);
-        // 生产者写入 timestamp_ns（端到端延迟起点）
-        slot->timestamp_ns = LatencyRecorder::now();
+        // 生产者写入 timestamp_ns（排队时间的起点）。不记录延迟时照旧写一个不带栅栏的读数：
+        // timestamp_ns 为 0 的订单，订单簿会在消费者线程上自己补读一次 TSC
+        slot->timestamp_ns = record_latency ? LatencyRecorder::now_serialized() : LatencyRecorder::now();
 
         // ③ 自旋直到 order_queue_ 有空位
         while (!order_queue_.try_push(slot)) {
@@ -162,7 +166,7 @@ void MatchingEngine::producer_loop(std::string_view symbol,
 
 // ── 消费者线程主循环 ─────────────────────────────────────────────────────────
 
-void MatchingEngine::consumer_loop(std::string_view symbol) {
+void MatchingEngine::consumer_loop(std::string_view symbol, bool record_latency) {
     // 初始化消费者侧的 OrderBook
     OrderBook book(symbol);
 
@@ -175,21 +179,34 @@ void MatchingEngine::consumer_loop(std::string_view symbol) {
         }
     };
 
+    // 处理一笔取出的订单；记录延迟时记下它的排队时间和服务时间
+    auto consume = [&](Order* order) {
+        if (record_latency) {
+            // 取出的时刻：排队时间的终点，服务时间的起点
+            const uint64_t t_pop = LatencyRecorder::now_serialized();
+            // 撮合中订单可能归还给生产者、被重新生成，所以先读出生产者的时间戳
+            const uint64_t t_push = order->timestamp_ns;
+
+            book.add_order_noalloc(order, trade_buf_, deallocator);
+
+            const uint64_t t_done = LatencyRecorder::now_serialized();
+            queue_latency_.record(t_pop - t_push);
+            service_latency_.record(t_done - t_pop);
+        } else {
+            book.add_order_noalloc(order, trade_buf_, deallocator);
+        }
+
+        // 归还由 add_order_noalloc 内部的 deallocator 统一负责：
+        //   FILLED incoming、撤单请求和被撤的挂单均在那里归还；挂单留在 PriceLevel 中
+
+        consumed_count_.fetch_add(1, std::memory_order_relaxed);
+    };
+
     while (true) {
         Order* order = nullptr;
 
         if (order_queue_.try_pop(order)) {
-            const uint64_t t_start = order->timestamp_ns;
-
-            book.add_order_noalloc(order, trade_buf_, deallocator);
-
-            const uint64_t latency = LatencyRecorder::now() - t_start;
-            latency_recorder_.record(latency);
-
-            // 归还由 add_order_noalloc 内部的 deallocator 统一负责：
-            //   FILLED incoming、撤单请求和被撤的挂单均在那里归还；挂单留在 PriceLevel 中
-
-            consumed_count_.fetch_add(1, std::memory_order_relaxed);
+            consume(order);
 
         } else {
             // 队列为空：检查生产者是否已完成
@@ -202,12 +219,7 @@ void MatchingEngine::consumer_loop(std::string_view symbol) {
                     break;
                 }
                 // 处理最后一条
-                const uint64_t t_start = order->timestamp_ns;
-                book.add_order_noalloc(order, trade_buf_, deallocator);
-                const uint64_t latency = LatencyRecorder::now() - t_start;
-                latency_recorder_.record(latency);
-                // 归还同样由 add_order_noalloc 内部统一处理
-                consumed_count_.fetch_add(1, std::memory_order_relaxed);
+                consume(order);
             }
             // 队列暂时为空但生产者未完成：继续自旋
         }
