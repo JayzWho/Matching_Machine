@@ -104,6 +104,19 @@ def unit_note(env):
             f"counter ran at {min(ghz):.6f} to {max(ghz):.6f} GHz ({len(ghz)} calibrations, env.json).")
 
 
+def latency_groups(rows):
+    """P50 and P99 of the counted latency reports, as
+    {(condition, pipeline, quantity, percentile): {(session, round): [TSC ticks]}}.
+    Studies recorded before the split into queue time and service time have
+    no `quantity` column; their reports are the end-to-end latency."""
+    groups = defaultdict(lambda: defaultdict(list))
+    for row in counted(rows):
+        if row["percentile"] in ("P50", "P99"):
+            key = (row["condition"], PIPELINES[row["binary"]], row.get("quantity") or "end-to-end", row["percentile"])
+            groups[key][(int(row["session"]), int(row["round"]))].append(int(row["tsc_ticks"]))
+    return groups
+
+
 def counted(rows):
     """The rows not marked as a warm-up. Studies recorded before the mark
     existed have no `warmup` column, and all of their rows count."""
@@ -514,24 +527,24 @@ def main():
             "launches of that round.", ""]
     out += table(["Condition", "Rounds", "Lowest", "Median", "Highest"], rows)
 
-    latency = defaultdict(lambda: defaultdict(list))    # (condition, pipeline, percentile) -> launch -> ticks
-    for row in counted(read(opts.study / "latency.csv")):
-        if row["percentile"] in ("P50", "P99"):
-            latency[(row["condition"], PIPELINES[row["binary"]], row["percentile"])][
-                (int(row["session"]), int(row["round"]))].append(int(row["tsc_ticks"]))
+    latency = latency_groups(read(opts.study / "latency.csv"))
     rows = []
-    for (c, pipeline, percentile), by_launch in sorted(
+    for (c, pipeline, quantity, percentile), by_launch in sorted(
             latency.items(), key=lambda item: (conditions.index(item[0][0]), item[0][1:])):
         meds = [median(v) for _, v in sorted(by_launch.items())]
         inside = median([max(v) / min(v) for v in by_launch.values()])
-        rows.append([c, pipeline, percentile, f"{median(meds):,.0f}", f"{min(meds):,.0f}", f"{max(meds):,.0f}",
-                     pct(spread(meds)), f"{inside:.1f}×"])
+        rows.append([c, pipeline, quantity, percentile, f"{median(meds):,.0f}", f"{min(meds):,.0f}",
+                     f"{max(meds):,.0f}", pct(spread(meds)), f"{inside:.1f}×"])
     out += ["## Pipeline latency at 100,000 orders", "",
-            "In TSC ticks, the unit of the processor's timestamp counter; " + unit_note(env)
-            + " Each launch prints one report per repetition; a launch is represented by the median of its "
-            "reports" + (", leaving out the warm-up's." if d.get("warmup_repetitions") else "."), ""]
-    out += table(["Condition", "Pipeline", "Percentile", "Median of launches", "Lowest launch", "Highest launch",
-                  "Spread of launch medians", "Highest / lowest report inside a launch, median"], rows, right_from=3)
+            "Queue time runs from the producer's timestamp to the moment the consumer takes the order out of the "
+            "queue, service time from then until matching is done; studies recorded before the two were split "
+            "report their sum, end-to-end. In TSC ticks, the unit of the processor's timestamp counter; "
+            + unit_note(env) + " Each launch prints one report of each quantity per repetition; a launch is "
+            "represented by the median of its reports" + (", leaving out the warm-up's." if d.get("warmup_repetitions")
+                                                           else "."), ""]
+    out += table(["Condition", "Pipeline", "Quantity", "Percentile", "Median of launches", "Lowest launch",
+                  "Highest launch", "Spread of launch medians", "Highest / lowest report inside a launch, median"],
+                 rows, right_from=4)
 
     print("\n".join(out))
 

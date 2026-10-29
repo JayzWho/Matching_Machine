@@ -10,8 +10,10 @@ launches. The test must stay quiet when the launches do not differ and must
 find both a gradual difference and a benchmark that settles on one of two
 levels at each launch. Also checks that rows marked as a warm-up are left out,
 and that rows of studies recorded before the mark existed all count, and that
-the latency table states the calibrated TSC frequency when a study has one, and
-that the pipeline throughput benchmarks are found under both of their names.
+the latency table states the calibrated TSC frequency when a study has one,
+keeps queue time and service time apart and reads the reports of studies
+recorded before the split as end-to-end latency, and that the pipeline
+throughput benchmarks are found under both of their names.
 """
 import random
 import sys
@@ -45,6 +47,22 @@ def tsc_frequency_stated():
             and "has not been calibrated" in bench_report.unit_note({"sessions": [{"before": {}}]}))
 
 
+def latency_quantities_kept_apart():
+    def row(quantity, repetition, ticks):
+        found = {"condition": "cleared", "binary": "bench_matching_engine", "session": "1", "round": "1",
+                 "report": str(repetition), "warmup": str(int(repetition == 0)), "percentile": "P50",
+                 "tsc_ticks": str(ticks)}
+        if quantity:
+            found["quantity"] = quantity
+        return found
+    split = bench_report.latency_groups([row("queue", 0, 5), row("service", 0, 7), row("queue", 1, 900),
+                                         row("service", 1, 600)])
+    before = bench_report.latency_groups([row(None, 0, 5), row(None, 1, 950)])
+    return (split == {("cleared", "SPSC pipeline", "queue", "P50"): {(1, 1): [900]},
+                      ("cleared", "SPSC pipeline", "service", "P50"): {(1, 1): [600]}}
+            and before == {("cleared", "SPSC pipeline", "end-to-end", "P50"): {(1, 1): [950]}})
+
+
 def pipeline_names_matched():
     old, new = "BM_Pipeline_Throughput/100000/iterations:3", "BM_Pipeline_Throughput/100000/iterations:3/real_time"
     queue = "BM_SPSC_ProducerConsumer/100000/real_time"
@@ -56,6 +74,7 @@ def main():
     gen, failed = random.Random(1), False
     for name, check in (("warm-up rows left out, unmarked rows counted", warmup_rows_left_out),
                         ("calibrated TSC frequency stated", tsc_frequency_stated),
+                        ("latency quantities kept apart", latency_quantities_kept_apart),
                         ("pipeline throughput found under both names", pipeline_names_matched)):
         ok = check()
         failed |= not ok

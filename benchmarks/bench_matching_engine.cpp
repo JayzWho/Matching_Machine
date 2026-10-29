@@ -6,7 +6,7 @@
  * 测量场景：
  *   1. BM_Pipeline_Throughput    — 完整 SPSC 流水线的订单吞吐量（orders/s）
  *   2. BM_SingleThread_Baseline  — 单线程 add_order_noalloc 基线（对比用）
- *   3. BM_Pipeline_LatencyReport — 端到端延迟分布报告（P50/P99，RDTSC 时钟周期）
+ *   3. BM_Pipeline_LatencyReport — 排队时间、服务时间的分布报告（P50/P99，TSC ticks）
  *
  * 运行方式（必须用 Release 模式，绑核以减少调度抖动）：
  *   cmake --build build/release -j$(nproc)
@@ -18,7 +18,7 @@
  *   - 多线程 benchmark 需要至少 2 个 CPU 核心
  *   - 进程正好能用两个 CPU 时（如上面的 taskset），生产者钉在编号小的、消费者钉在编号大的上，
  *     线程创建时即生效；否则不钉核，由调度器摆放。摆法写在每个基准的 label 里
- *   - 在腾讯云虚拟机上，硬件 PMU 不可用；延迟以 RDTSC 时钟周期报告
+ *   - 延迟以 TSC ticks 报告：不是核心时钟周期，也不换算成时间
  *   - BM_Pipeline_LatencyReport 通过 MatchingEngine 内部 LatencyRecorder 手动输出，
  *     Google Benchmark 框架无法直接测量跨线程延迟分布
  */
@@ -146,13 +146,14 @@ static void BM_Pipeline_LatencyReport(benchmark::State& state) {
     MatchingEngine engine;
     for (auto _ : state) {
         state.PauseTiming();
-        engine.start("BTCUSD", 100'000'000LL, 100'000, 0.2, cpus);
+        engine.start("BTCUSD", 100'000'000LL, 100'000, 0.2, cpus, /*record_latency=*/true);
         engine.stop();
         state.ResumeTiming();
 
         // 手动输出延迟百分位（输出到 stdout，不影响 benchmark JSON 结果）
         std::printf("\n--- Pipeline Latency Report (100K orders) ---\n");
-        engine.latency_recorder().report(/*cpu_ghz=*/2.494);
+        engine.queue_latency().report("queue");
+        engine.service_latency().report("service");
         std::printf("  (Trades produced: %zu)\n\n",
                     engine.trade_buffer().total_written());
     }

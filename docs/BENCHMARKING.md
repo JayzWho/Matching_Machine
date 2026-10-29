@@ -13,8 +13,8 @@ All four are built from `benchmarks/` by the Release configuration.
 |---|---|---|---|
 | `bench_order_book` | Add, match, sweep, cancel and mixed workload on the order book (8) | 1 | the first measurement core |
 | `bench_spsc_ring_buffer` | Ring buffer push and pop (2); producer to consumer over the SPSC ring buffer (3) and over a mutex queue (2), each on 16 memory regions in both thread placements | 1, then 2 | both measurement cores: each two-thread benchmark pins the producer to one and the consumer to the other, in both assignments |
-| `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report | 2 | both measurement cores: the producer thread on the lower-numbered, the consumer on the higher |
-| `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report | 2 | as `bench_matching_engine` |
+| `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report of queue time and service time | 2 | both measurement cores: the producer thread on the lower-numbered, the consumer on the higher |
+| `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report of queue time and service time | 2 | as `bench_matching_engine` |
 
 These programs still contain the defects described in `AUDIT.md`. A recording
 of them in that state is called a **control**: it exists so that a later fix
@@ -183,7 +183,14 @@ recorders mark the first repetition of every benchmark as a warm-up.
 - Latency is reported in ticks of the processor's timestamp counter (TSC).
   `capture_env.sh` measures the counter's frequency against `CLOCK_MONOTONIC`
   before and after every session and records it in `env.json` under `tsc`;
-  the reports do not convert ticks to time yet.
+  the reports do not convert ticks to time yet. Queue time subtracts a reading
+  taken on the producer's core from one taken on the consumer's, which relies
+  on the counters of the cores being synchronized. The kernel compares them as
+  it brings each CPU up and stops using the TSC as its clock source if they
+  differ; `env.json` records the clock source under `tsc`. This has not been
+  verified independently. Only the two latency-report benchmarks take these
+  readings, each between two fences; the fences slow the consumer, so the queue
+  time they report is longer than at the speed the throughput benchmarks run.
 - The timer tick, softirqs and per-CPU kernel threads stay on the measurement
   cores. Removing them needs kernel boot parameters.
 - A study covers one boot. Whether results move across reboots or kernel

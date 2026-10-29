@@ -302,10 +302,10 @@ class DiagnosticStudy:
                                            "cpu_s": round(cpu, 4),
                                            "cpu_per_wall": round(cpu / wall, 4) if wall else "",
                                            "waited_ms": round(waited, 3)})
-        # As in bench_record.py, report i is printed by repetition i.
-        for index, report in enumerate(recorder.latency_reports(output)):
+        for quantity, index, report in recorder.latency_reports(output):
             for percentile, ticks in report.items():
-                self.rows["latency"].append({**key, "report": index, "warmup": recorder.warmup(index),
+                self.rows["latency"].append({**key, "quantity": quantity, "report": index,
+                                             "warmup": recorder.warmup(index),
                                              "percentile": percentile, "tsc_ticks": ticks})
         self.checkpoint()
 

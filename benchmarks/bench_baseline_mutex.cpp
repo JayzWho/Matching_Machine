@@ -8,11 +8,11 @@
  *                    逻辑与 docs/snapshots/order_book_v1_deque.{h,cpp}（见 tag archive/pre-cleanup-2026-10）完全一致，
  *                    内联于此文件以避免与主项目 order_book.h 的命名冲突。
  *   2. MutexMatchingEngine — 极简双线程实现：
- *                    Producer: 生成订单，写 RDTSC 时间戳，加锁 push + notify
+ *                    Producer: 生成订单，写 TSC 时间戳，加锁 push + notify
  *                    Consumer: wait + pop，调用 OrderBookV1::add_order，记录延迟
  *                    共享队列：std::queue<Order*> + std::mutex + std::condition_variable
  *   3. BM_MutexPipeline_Throughput    — 10K / 50K / 100K 吞吐测试
- *   4. BM_MutexPipeline_LatencyReport — 100K 端到端延迟 P50/P99 报告
+ *   4. BM_MutexPipeline_LatencyReport — 100K 笔订单的排队时间、服务时间 P50/P99 报告
  *
  * 运行方式（Release 模式，绑核）：
  *   cmake --build build/release -j$(nproc)
@@ -26,7 +26,7 @@
  *   - 此文件完全独立，不修改 src/ 或 include/ 中的任何代码
  *   - 线程摆法与 bench_matching_engine 相同：进程正好能用两个 CPU 时，生产者钉在编号小的、
  *     消费者钉在编号大的上（thread_placement.h），否则不钉核；摆法写在 label 里
- *   - 延迟单位与 SPSC 版本完全一致（RDTSC 时钟周期 + 2.494 GHz 换算）
+ *   - 延迟的测量点和单位与 SPSC 版本相同：取出订单时、撮合完成时各读一次 TSC，单位 TSC ticks
  */
 
 #include <benchmark/benchmark.h>
@@ -34,7 +34,7 @@
 // 复用主项目中的基础类型和工具（只包含纯头文件，无符号冲突）
 #include "order.h"           // Order, Trade, Side, OrderType, OrderStatus
 #include "feed_simulator.h"  // FeedSimulator::generate_random
-#include "latency_recorder.h" // LatencyRecorder::now(), report()
+#include "latency_recorder.h" // LatencyRecorder::now_serialized(), report()
 #include "thread_placement.h" // ThreadCpus, PinnedThread, allowed_cpu_pair()
 
 #include <map>
@@ -275,7 +275,8 @@ private:
 //             shared_ptr 引用计数归零后自动释放，无需手动 delete
 //   - 共享队列：std::queue<shared_ptr<Order>> + std::mutex + std::condition_variable
 //   - 订单内存：每条订单独立堆分配（make_shared），无 MemoryPool，无预分配
-//   - 延迟测量：生产者 push 前写 RDTSC，消费者 pop 后做差
+//   - 延迟测量：生产者 push 前写 TSC 时间戳；消费者取出时、撮合完成时各读一次，
+//               分出排队时间和服务时间
 
 class MutexMatchingEngine {
 public:
@@ -289,12 +290,13 @@ public:
     MutexMatchingEngine(const MutexMatchingEngine&) = delete;
     MutexMatchingEngine& operator=(const MutexMatchingEngine&) = delete;
 
-    /// 启动双线程流水线，处理 order_count 笔订单；cpus 与 MatchingEngine::start 相同
+    /// 启动双线程流水线，处理 order_count 笔订单；cpus、record_latency 与 MatchingEngine::start 相同
     void start(std::string_view symbol,
                int64_t         base_price,
                size_t          order_count,
-               double          cancel_ratio = 0.2,
-               me::ThreadCpus  cpus         = {}) {
+               double          cancel_ratio   = 0.2,
+               me::ThreadCpus  cpus           = {},
+               bool            record_latency = false) {
         if (running_.load()) throw std::runtime_error("already running");
 
         // 重置状态
@@ -303,19 +305,21 @@ public:
             while (!shared_queue_.empty()) shared_queue_.pop();
         }
         producer_done_.store(false);
-        latency_recorder_.reset();
+        queue_latency_.reset();
+        service_latency_.reset();
         running_.store(true);
 
         try {
             // 启动消费者（先起，避免生产者 push 时消费者未 wait）
-            consumer_thread_ = me::PinnedThread(cpus.consumer, [this, sym = std::string(symbol)] {
-                consumer_loop(sym);
+            consumer_thread_ = me::PinnedThread(cpus.consumer, [this, sym = std::string(symbol), record_latency] {
+                consumer_loop(sym, record_latency);
             });
 
             // 启动生产者（传入 symbol/base_price/cancel_ratio，线程内流式生成）
             producer_thread_ = me::PinnedThread(cpus.producer, [this, sym = std::string(symbol),
-                                                                base_price, order_count, cancel_ratio] {
-                producer_loop(sym, base_price, order_count, cancel_ratio);
+                                                                base_price, order_count, cancel_ratio,
+                                                                record_latency] {
+                producer_loop(sym, base_price, order_count, cancel_ratio, record_latency);
             });
         } catch (...) {
             // 线程没起来：与 MatchingEngine 相同，让已起来的消费者退出后再抛出
@@ -337,11 +341,12 @@ public:
         running_.store(false);
     }
 
-    const me::LatencyRecorder& latency_recorder() const { return latency_recorder_; }
+    me::LatencyRecorder& queue_latency() { return queue_latency_; }
+    me::LatencyRecorder& service_latency() { return service_latency_; }
 
 private:
     void producer_loop(std::string_view symbol, int64_t base_price,
-                       size_t order_count, double cancel_ratio) {
+                       size_t order_count, double cancel_ratio, bool record_latency) {
         me::FeedSimulator sim(symbol, base_price, cancel_ratio);
 
         for (size_t i = 0; i < order_count; ++i) {
@@ -349,8 +354,10 @@ private:
             auto order = std::make_shared<me::Order>();
             sim.generate_into(order.get());
 
-            // 写入 RDTSC 时间戳（端到端延迟起点，紧贴 push 前）
-            order->timestamp_ns = me::LatencyRecorder::now();
+            // 写入 TSC 时间戳（排队时间的起点，紧贴 push 前）；不记录延迟时与 SPSC 版本相同，
+            // 照旧写一个不带栅栏的读数，免得订单簿在消费者线程上补读
+            order->timestamp_ns = record_latency ? me::LatencyRecorder::now_serialized()
+                                                 : me::LatencyRecorder::now();
 
             {
                 std::lock_guard<std::mutex> lk(queue_mtx_);
@@ -369,7 +376,7 @@ private:
         cv_.notify_all();
     }
 
-    void consumer_loop(std::string_view symbol) {
+    void consumer_loop(std::string_view symbol, bool record_latency) {
         me_v1::OrderBookV1 book(symbol);
 
         // 持有所有 shared_ptr，确保 Order 生命周期覆盖整个 book 的使用期
@@ -392,17 +399,27 @@ private:
                 shared_queue_.pop();
             }
 
-            // 端到端延迟测量：从生产者写入时间戳到消费者处理完成
-            const uint64_t t_start = order->timestamp_ns;
+            auto match = [&] {
+                if (order->type == me::OrderType::CANCEL) {
+                    book.cancel_order(order->order_id);
+                } else {
+                    book.add_order(order.get());
+                }
+            };
 
-            if (order->type == me::OrderType::CANCEL) {
-                book.cancel_order(order->order_id);
+            if (record_latency) {
+                // 取出的时刻：排队时间的终点，服务时间的起点（与 SPSC 版本相同）
+                const uint64_t t_pop = me::LatencyRecorder::now_serialized();
+                const uint64_t t_push = order->timestamp_ns;
+
+                match();
+
+                const uint64_t t_done = me::LatencyRecorder::now_serialized();
+                queue_latency_.record(t_pop - t_push);
+                service_latency_.record(t_done - t_pop);
             } else {
-                book.add_order(order.get());
+                match();
             }
-
-            const uint64_t latency = me::LatencyRecorder::now() - t_start;
-            latency_recorder_.record(latency);
 
             // 保留 shared_ptr 直到 book 使用完毕，防止悬空指针
             alive.push_back(std::move(order));
@@ -424,8 +441,9 @@ private:
     me::PinnedThread producer_thread_;
     me::PinnedThread consumer_thread_;
 
-    // 延迟记录器
-    me::LatencyRecorder latency_recorder_{100'000};
+    // 排队时间、服务时间的记录器（消费者线程写，stop() 后 report）
+    me::LatencyRecorder queue_latency_{100'000};
+    me::LatencyRecorder service_latency_{100'000};
 };
 
 
@@ -477,13 +495,13 @@ static void BM_MutexPipeline_LatencyReport(benchmark::State& state) {
     alignas(64) MutexMatchingEngine engine;  // 与吞吐测试相同，固定对象位置
     for (auto _ : state) {
         state.PauseTiming();
-        engine.start("BTCUSD", 100'000'000LL, 100'000, 0.2, cpus);
+        engine.start("BTCUSD", 100'000'000LL, 100'000, 0.2, cpus, /*record_latency=*/true);
         engine.stop();
         state.ResumeTiming();
 
         std::printf("\n--- Mutex Baseline Latency Report (100K orders) ---\n");
-        // 使用 const_cast 访问 non-const report（LatencyRecorder::report 会排序 samples_）
-        const_cast<me::LatencyRecorder&>(engine.latency_recorder()).report(/*cpu_ghz=*/2.494);
+        engine.queue_latency().report("queue");
+        engine.service_latency().report("service");
         std::printf("\n");
     }
     state.SetLabel(placement(cpus));
