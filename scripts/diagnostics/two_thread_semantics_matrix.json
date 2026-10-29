@@ -1,0 +1,7 @@
+[
+  {"name": "queues", "binary": "build/variants/c5/bench_spsc_ring_buffer", "filter": "BM_"},
+  {"name": "spsc-pipeline", "binary": "build/variants/c5/bench_matching_engine", "filter": "BM_"},
+  {"name": "mutex-pipeline", "binary": "build/variants/c5/bench_baseline_mutex", "filter": "BM_"},
+  {"name": "spsc-pipeline-master", "binary": "build/variants/c2/bench_matching_engine", "filter": "BM_"},
+  {"name": "mutex-pipeline-master", "binary": "build/variants/c2/bench_baseline_mutex", "filter": "BM_"}
+]

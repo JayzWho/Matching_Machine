@@ -1,0 +1,42 @@
+[
+  {
+    "name": "queues",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c5/bench_spsc_ring_buffer",
+    "filter": "BM_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "spsc-pipeline",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c5/bench_matching_engine",
+    "filter": "BM_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "mutex-pipeline",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c5/bench_baseline_mutex",
+    "filter": "BM_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "spsc-pipeline-master",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c2/bench_matching_engine",
+    "filter": "BM_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  },
+  {
+    "name": "mutex-pipeline-master",
+    "binary": "/home/jz/projects/personal/Matching_Machine/build/variants/c2/bench_baseline_mutex",
+    "filter": "BM_",
+    "prefix": [],
+    "args": [],
+    "env": {}
+  }
+]
