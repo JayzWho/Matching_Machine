@@ -138,6 +138,9 @@ private:
         void pop_front() {
             if (head < orders.size()) {
                 ++head;
+                // 跳过撤单留下的空洞，使 front() 总是活订单：档位里只剩空洞时
+                // empty() 为真，撮合随即删除这一档，最优价不会停在空档位上
+                while (head < orders.size() && orders[head] == nullptr) ++head;
                 // 超过一半是空洞时 compact，均摊 O(1)
                 if (head > 16 && head > orders.size() / 2) {
                     orders.erase(orders.begin(),
