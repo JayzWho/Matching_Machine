@@ -386,3 +386,27 @@ TEST(OrderBookNoallocTest, Cancel_UnknownOrderReturnsOnlyRequest) {
     EXPECT_EQ(deallocated[0], &cancel_filled);
     EXPECT_EQ(deallocated[1], &cancel_unknown);
 }
+
+TEST(OrderBookNoallocTest, FillRemovesLevelLeftWithOnlyCancelledOrders) {
+    TradeRingBuffer<64> buf;
+    OrderBook book("BTCUSD");
+    auto noop = [](Order*) {};
+
+    // 买档 100 里排着 first 和一个已撤的订单；卖单吃掉 first 后这一档只剩空洞，
+    // 应被删除，最优买价跳到下一档
+    Order first     = make_order(1, Side::BUY, 100'000'000, 10);
+    Order cancelled = make_order(2, Side::BUY, 100'000'000, 10);
+    Order next      = make_order(3, Side::BUY,  99'000'000, 10);
+    book.add_order_noalloc(&first, buf, noop);
+    book.add_order_noalloc(&cancelled, buf, noop);
+    book.add_order_noalloc(&next, buf, noop);
+    Order cancel = make_cancel(2);
+    book.add_order_noalloc(&cancel, buf, noop);
+
+    Order sell = make_order(4, Side::SELL, 100'000'000, 10);
+    book.add_order_noalloc(&sell, buf, noop);
+
+    ASSERT_EQ(buf.size(), 1u);
+    EXPECT_EQ(buf[0].buy_order_id, 1u);
+    EXPECT_EQ(book.best_bid(), 99'000'000);
+}

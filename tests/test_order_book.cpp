@@ -183,6 +183,25 @@ TEST_F(OrderBookTest, CancelAlreadyFilledOrder) {
     EXPECT_FALSE(result);
 }
 
+TEST_F(OrderBookTest, FillRemovesLevelLeftWithOnlyCancelledOrders) {
+    // 档位 100 里排着 first 和一个已撤的订单；买单吃掉 first 后这一档只剩空洞，
+    // 应被删除，最优卖价跳到下一档
+    auto first     = make_order(Side::SELL, 100'000'000, 10);
+    auto cancelled = make_order(Side::SELL, 100'000'000, 10);
+    auto next      = make_order(Side::SELL, 101'000'000, 10);
+    book->add_order(&first);
+    book->add_order(&cancelled);
+    book->add_order(&next);
+    ASSERT_TRUE(book->cancel_order(cancelled.order_id));
+
+    auto buy = make_order(Side::BUY, 100'000'000, 10);
+    auto trades = book->add_order(&buy);
+
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].sell_order_id, first.order_id);
+    EXPECT_EQ(book->best_ask(), 101'000'000);
+}
+
 // ── 回调测试（已迁移为 TradeRingBuffer 验证） ──────────────────────────────────
 
 TEST_F(OrderBookTest, TradeRecordedInRingBuffer) {
