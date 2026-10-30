@@ -101,6 +101,9 @@ static void BM_SingleThread_Baseline(benchmark::State& state) {
 
     FeedSimulator sim("BTCUSD", 100'000'000LL, /*cancel_ratio=*/kCancelRatio);
     auto orders = sim.generate_random(kBatchSize);
+    // 与流水线相同，订单进订单簿前已有时间戳（非零即可），订单簿不再自己读 TSC。
+    // 否则第一次迭代每笔多读一次 TSC，之后的迭代复用已写好的时间戳，各次迭代不一样
+    for (auto& o : orders) o.timestamp_ns = 1;
 
     // 将值语义的 Order 放入内存池（模拟 MemoryPool 路径）
     // 此处为简化，直接用 vector<Order> 的地址
