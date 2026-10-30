@@ -62,7 +62,7 @@ NOT_TIMED = "_LatencyReport"    # their timed region is the printing of the late
 # (title, threads in the timed region, predicate on (binary, benchmark)).
 FAMILIES = [
     ("Order book and matching", 1,
-     lambda b, n: b == "bench_order_book" or n == "BM_SingleThread_Baseline"),
+     lambda b, n: b == "bench_order_book" or n.startswith("BM_SingleThread_Baseline")),
     ("Ring buffer push and pop", 1,
      lambda b, n: n.startswith("BM_SPSC_SingleThread_")),
     ("SPSC ring buffer, producer to consumer", 2,

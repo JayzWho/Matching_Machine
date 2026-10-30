@@ -208,7 +208,7 @@ class DiagnosticStudy:
                 try:
                     output, _, warmup = recorder.launch(
                         "bench_order_book", cores[:1], measure,
-                        ["--benchmark_filter=BM_AddOrder_NoMatch", "--benchmark_repetitions=1",
+                        ["--benchmark_filter=BM_AddOrder_NoMatch_V3", "--benchmark_repetitions=1",
                          f"--benchmark_min_time={self.opts.warmup}s"], warmup_path, sample_interval=0.1)
                 except BaseException as exc:
                     warmup_path.with_suffix(".log").write_bytes(getattr(exc, "benchmark_output", b""))
