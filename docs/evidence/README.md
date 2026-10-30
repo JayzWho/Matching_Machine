@@ -7,11 +7,11 @@ are produced is described in [`../BENCHMARKING.md`](../BENCHMARKING.md).
 
 | Directory | Contents | Status |
 |---|---|---|
-| [`historical_vm/`](historical_vm/) | The one raw result file that survives from the decommissioned cloud VM | Historical. Cannot be reproduced |
-| [`11th-Gen-Intel-Core-i5-1135G7/2026-10-15_16-04-12_40a57bc_control/`](11th-Gen-Intel-Core-i5-1135G7/2026-10-15_16-04-12_40a57bc_control/) | The unfixed benchmarks on the current bare-metal machine, with the mutex baseline's hang fixed and its engine object aligned to a cache line: 32 launches of each binary in 4 sessions | Current control |
+| [`11th-Gen-Intel-Core-i5-1135G7/2026-10-30_15-55-52_46cf493_control/`](11th-Gen-Intel-Core-i5-1135G7/2026-10-30_15-55-52_46cf493_control/) | The fixed benchmarks on the current bare-metal machine: 32 launches of each binary in 4 sessions. README section 4 reports it | Current control |
 
-Measurements from the cloud VM and from the bare-metal machine are never
-compared as if a code change separated them.
+The measurements published from a cloud VM before the audit are kept only at
+the tag `v1.0-vm-era`; [`../AUDIT.md`](../AUDIT.md) explains why they were
+withdrawn.
 
 ## Completed studies
 
@@ -112,6 +112,11 @@ one subdirectory with the files above per recording.
 | `archive/variance-sources-2026-10` | The variance-sources study: six recordings and their report, the script that builds its diagnostic programs, and the condition matrices | The study is answered and its conclusions are listed above. The fixes it calls for are made in their own pull requests |
 | `archive/queue-regimes-2026-10` | The queue-regimes study: one recording and its report, the script that builds its diagnostic program, the condition matrix and the script that prints its tables | The study is answered and its conclusions are listed above. The fixes it calls for are made in their own pull requests |
 | `archive/queue-mechanism-2026-10` | The queue-mechanism study: two recordings and one launch as root with their report, the script that builds its diagnostic program, the two condition matrices, the helper that holds measurement mode for the root launch, and the script that prints its tables | The study is answered and its conclusions are listed above. The fixes it calls for are made in their own pull requests |
+| `archive/pipeline-fixes-2026-10` | The validation recording of #17: the pipelines with a warm-up repetition, the calibrated TSC, threads pinned in the process and the memory pool refilled | It served the pull request. The current control gives the numbers of the fixed code |
+| `archive/two-thread-semantics-2026-10` | The validation recording of #18: the queue benchmarks on 16 memory regions in both placements, and the pipelines' latency split into queue time and service time | As above |
+| `archive/order-book-fix-2026-10` | The check of #19, which fixed two order book defects | As above |
+| `archive/bench-semantics-2026-10` | The check of #20, which fixed what the single-threaded benchmarks time and added the v1 order book to them; run outside measurement mode | As above |
+| `archive/control-2026-10-15` | The control of 2026-10-15, recorded on the unfixed benchmarks; the one raw result file that survives from the cloud VM (`docs/evidence/historical_vm/`); and `docs/project_overview.md`, a Chinese write-up of the cloud VM period | The control of 2026-10-30 replaced the first. The other two hold only cloud VM numbers, which the audit withdrew |
 | `archive/control-runs-2026-10` | Three recordings of the unfixed benchmarks with one launch per binary each (2026-09-22 and twice on 2026-10-07), their comparison as `REPRODUCIBILITY.md`, and the scripts that produced them | Three single launches cannot tell movement between launches from movement between sessions or boots. Replaced by the repeatability study |
 | `archive/launch-variance-first-recording` | The first recording of the launch-variance studies with its tool snapshots, summaries, plots and one preflight that stopped before measuring, and its report `docs/LAUNCH_VARIANCE.md` | Recorded with tools that were not yet committed, in the shared condition only, while a VirtualBox VM was running. Replaced by the launch-variance study |
 | `archive/mutex-lost-wakeup` | A stress program that runs the mutex pipeline back to back until it hangs, and a recording of the pipeline's throughput before and after the hang was fixed | Both served the fix of the mutex baseline's hang, which is complete. The fix changed throughput by less than the variation between launches |
