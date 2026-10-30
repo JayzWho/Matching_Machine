@@ -2,6 +2,7 @@
 #include "matching_engine.h"
 #include <gtest/gtest.h>
 #include <cstring>
+#include <vector>
 
 using namespace me;
 
@@ -181,6 +182,44 @@ TEST_F(OrderBookTest, CancelAlreadyFilledOrder) {
     // 已成交的订单不能撤
     bool result = book->cancel_order(buy.order_id);
     EXPECT_FALSE(result);
+}
+
+TEST_F(OrderBookTest, FillRemovesLevelLeftWithOnlyCancelledOrders) {
+    // 档位 100 里排着 first 和一个已撤的订单；买单吃掉 first 后这一档只剩空洞，
+    // 应被删除，最优卖价跳到下一档
+    auto first     = make_order(Side::SELL, 100'000'000, 10);
+    auto cancelled = make_order(Side::SELL, 100'000'000, 10);
+    auto next      = make_order(Side::SELL, 101'000'000, 10);
+    book->add_order(&first);
+    book->add_order(&cancelled);
+    book->add_order(&next);
+    ASSERT_TRUE(book->cancel_order(cancelled.order_id));
+
+    auto buy = make_order(Side::BUY, 100'000'000, 10);
+    auto trades = book->add_order(&buy);
+
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].sell_order_id, first.order_id);
+    EXPECT_EQ(book->best_ask(), 101'000'000);
+}
+
+// ── 清空测试 ──────────────────────────────────────────────────────────────────
+
+TEST_F(OrderBookTest, ClearKeepsIndexCapacity) {
+    // 清空后订单索引的槽位数应与新建的订单簿相同，之后的插入不必重新长大
+    const size_t fresh = book->index_capacity();
+    std::vector<Order> orders;
+    orders.reserve(1000);
+    for (int i = 0; i < 1000; ++i) {
+        orders.push_back(make_order(Side::BUY, 99'000'000 - i * 100, 1));
+        book->add_order(&orders.back());
+    }
+
+    book->clear();
+
+    EXPECT_EQ(book->order_count(), 0u);
+    EXPECT_EQ(book->best_bid(), 0);
+    EXPECT_EQ(book->index_capacity(), fresh);
 }
 
 // ── 回调测试（已迁移为 TradeRingBuffer 验证） ──────────────────────────────────

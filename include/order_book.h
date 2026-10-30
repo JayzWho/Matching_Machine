@@ -90,10 +90,13 @@ public:
     /// 当前订单总数（用于测试验证）
     [[nodiscard]] size_t order_count() const noexcept;
 
+    /// 订单索引的槽位数（用于测试验证）
+    [[nodiscard]] size_t index_capacity() const noexcept;
+
     /**
-     * @brief 清空订单簿，保留已分配的内存（用于 benchmark 内批量复用）
+     * @brief 清空订单簿，订单索引保留已分配的槽位（用于 benchmark 内批量复用）
      *
-     * 清除所有价格档位和订单索引，重置成交计数器。
+     * 清除所有价格档位和订单索引，重置成交计数器。之后的插入与新建的订单簿一样不触发 rehash。
      * 注意：调用方负责管理 Order 对象的生命周期，clear() 不会释放 Order 指针。
      */
     void clear() noexcept;
@@ -138,6 +141,9 @@ private:
         void pop_front() {
             if (head < orders.size()) {
                 ++head;
+                // 跳过撤单留下的空洞，使 front() 总是活订单：档位里只剩空洞时
+                // empty() 为真，撮合随即删除这一档，最优价不会停在空档位上
+                while (head < orders.size() && orders[head] == nullptr) ++head;
                 // 超过一半是空洞时 compact，均摊 O(1)
                 if (head > 16 && head > orders.size() / 2) {
                     orders.erase(orders.begin(),
