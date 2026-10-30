@@ -57,6 +57,19 @@ class DiagnosticTests(unittest.TestCase):
                              [("queue", 1), ("service", 1), ("queue", 0), ("service", 0),
                               ("queue", 0), ("service", 0)])
 
+    def test_samples_reject_benchmark_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "run.json"
+            run = {"name": "BM_Test", "run_name": "BM_Test", "run_type": "iteration", "repetition_index": 0,
+                   "real_time": 10.0, "cpu_time": 10.0, "time_unit": "ns", "iterations": 5}
+            path.write_text(json.dumps({"benchmarks": [run]}))
+            self.assertEqual(recorder.samples(path), [("BM_Test", 0, 10.0, 10.0, 5)])
+            failed = {**run, "name": "BM_Failed", "run_name": "BM_Failed", "error_occurred": True,
+                      "error_message": "an iteration did not match exactly one order"}
+            path.write_text(json.dumps({"benchmarks": [run, failed]}))
+            with self.assertRaisesRegex(ValueError, "BM_Failed: an iteration did not match"):
+                recorder.samples(path)
+
     def test_latency_reports_split_by_quantity(self):
         report = ("=== Latency Report: {} (100000 samples, TSC ticks) ===\n"
                   "P50  :    {} ticks\nMax  :   {} ticks\n")
