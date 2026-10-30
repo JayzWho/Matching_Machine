@@ -17,7 +17,9 @@
  */
 
 #include <benchmark/benchmark.h>
+#include <cstring>
 #include <memory>
+#include <vector>
 #include "order_book.h"
 #include "feed_simulator.h"
 
@@ -26,13 +28,18 @@ using namespace me;
 // ── 辅助工具 ────────────────────────────────────────────────────────────────
 
 // 构造一个简单限价单（不依赖 FeedSimulator）
+//
+// 时间戳预先写好（非零即可）：订单簿遇到时间戳为 0 的订单会自己读一次 TSC 补上，
+// 而流水线里生产者总会先写时间戳。不写的话，每个订单对象第一次进入计时区时多读一次 TSC，
+// 之后复用时又不读，各次迭代做的事不一样。
 static Order make_order(uint64_t id, Side side, int64_t price, int64_t qty) {
     Order o{};
-    o.order_id  = id;
-    o.side      = side;
-    o.price     = price;
-    o.quantity  = qty;
-    o.type      = OrderType::LIMIT;
+    o.order_id     = id;
+    o.side         = side;
+    o.price        = price;
+    o.quantity     = qty;
+    o.type         = OrderType::LIMIT;
+    o.timestamp_ns = 1;
     std::strncpy(o.symbol, "BTCUSD", 7);
     return o;
 }
@@ -265,6 +272,7 @@ static void BM_MixedWorkload(benchmark::State& state) {
     // 预生成订单（不计入 benchmark 时间）
     FeedSimulator sim("BTCUSD", 100'000'000, /*cancel_ratio=*/0.1, /*seed=*/42);
     auto orders = sim.generate_random(1000'000);
+    for (auto& o : orders) o.timestamp_ns = 1;  // 生成的时间戳为 0，原因见 make_order
 
     for (auto _ : state) {
         state.PauseTiming();
