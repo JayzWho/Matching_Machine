@@ -167,91 +167,63 @@ static void BM_AddOrder_FullMatch(benchmark::State& state) {
 BENCHMARK(BM_AddOrder_FullMatch);
 
 // ── 3. 大单扫穿多档（最坏情况） ──────────────────────────────────────────────
-// 测试参数化：state.range(0) 控制被扫穿的价格档位数。
+// 测试参数化：state.range(0) 控制被扫穿的价格档位数 L。
+// 每次迭代：一张数量为 L 的买单依次吃掉 L 个价格档位，每档一张数量为 1 的卖单。
 //
-// 改进设计 v2（解决 v1 中 kBatch 个 OrderBook 反复构造/析构哈希表的问题）：
-//   v1 的 fill_batch 每批构造 kBatch 个 OrderBook，每个 OrderBook 在构造时
-//   会 reserve(65536) 的 flat_hash_map，导致大量堆分配，严重拉长 PauseTiming
-//   区间，同时干扰 perf 对核心撮合路径的采样。
-//
-//   v2 方案：
-//   - 整个 benchmark 生命周期只构造 1 个 OrderBook（循环外），避免重复构造。
-//   - Slot 结构仅存储数据（sells + buy），不再持有 OrderBook。
-//   - fill_batch 只生成订单数据（无堆分配），然后调用 book.clear() + 重新挂单，
-//     book 内部的 flat_hash_map 桶内存被复用（clear 不释放已分配的容量）。
-//   - PauseTiming 频率仍为 1 次/kBatch，噪声摊薄逻辑不变。
+// 设计说明：
+//   - 与 NoMatch 相同的批量模式：每批暂停计时一次，在暂停内重置这一批订单的状态、
+//     新建订单簿、挂好约 1000 张卖单（价格逐档升高，一档一张）。一批 1000 / L 次迭代，
+//     第 s 次迭代的买单以第 s 组 L 档里最高的价格下单，更低的档位已被前面的买单吃掉，
+//     它正好吃完这一组 L 档后全部成交。
+//   - 计数器 trades_per_iteration 应恰为 L；不是 L 时报错。
 static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     const int levels = static_cast<int>(state.range(0));
+    const int sweeps = 1000 / levels;  // 每批的迭代次数
 
-    // kBatch：每批预建的盘口数量。
-    // levels 越小，每次迭代耗时越短，需要更多批量来摊薄重建开销。
-    // 这里统一取 500，对所有 levels 均足够。
-    constexpr int kBatch = 500;
-
-    // Slot 仅持有订单数据，不再包含 OrderBook
-    // sells 持久化存储，确保 OrderBook 内部保存的指针在整批次期间始终有效
-    struct Slot {
-        std::vector<Order> sells;
-        Order buy;
-    };
-    std::vector<Slot> slots(kBatch);
-    for (auto& s : slots) s.sells.resize(levels);
-
-    // 全局递增 id，确保跨批次的 order_id 不重复
+    std::vector<Order> sell_orders(static_cast<size_t>(sweeps * levels));
+    std::vector<Order> buy_orders(static_cast<size_t>(sweeps));
     uint64_t next_id = 1;
-
-    // 整个 benchmark 只构造一次 OrderBook，避免反复构造/析构哈希表
-    OrderBook book("BTCUSD");
-
-    // 填充一批槽位的订单数据，并重建盘口（在 PauseTiming 内调用）
-    // 注意：此函数会先 clear() 再重新挂单，book 的内存容量被复用
-    auto fill_batch = [&]() {
-        book.clear();
-        for (int s = 0; s < kBatch; ++s) {
-            // 生成卖单数据
-            for (int i = 0; i < levels; ++i) {
-                slots[s].sells[i] = make_order(next_id++, Side::SELL,
-                                               100'000'000 + i * 100'000, 1);
-            }
-            // 预构造扫穿买单（价格高于所有卖档，qty=levels 恰好全部成交）
-            slots[s].buy = make_order(next_id++, Side::BUY,
-                                      100'000'000 + (levels + 1) * 100'000,
-                                      levels);
-        }
-        // 将第 0 批槽位的卖单挂入盘口，作为第一次迭代的初始状态
-        // 后续每次迭代结束后，在 PauseTiming 内换入下一个 slot 的卖单
+    for (int s = 0; s < sweeps; ++s) {
         for (int i = 0; i < levels; ++i) {
-            book.add_order(&slots[0].sells[i]);
+            const int k = s * levels + i;
+            sell_orders[k] = make_order(next_id++, Side::SELL, 100'000'000 + k * 100'000, 1);
         }
-    };
-
-    // 初始填充（benchmark 开始前，不在计时区间内）
-    fill_batch();
-
-    int idx = 0;
-    for (auto _ : state) {
-        // 计时范围：仅含扫穿撮合逻辑
-        auto trades = book.add_order(&slots[idx].buy);
-        benchmark::DoNotOptimize(trades);
-        ++idx;
-
-        // 每次迭代结束后，在 PauseTiming 内为下一次迭代准备盘口
-        // （clear + 挂下一个 slot 的卖单，或批量重建）
-        if (idx == kBatch) {
-            state.PauseTiming();
-            fill_batch();
-            state.ResumeTiming();
-            idx = 0;
-        } else {
-            state.PauseTiming();
-            book.clear();
-            for (int i = 0; i < levels; ++i) {
-                book.add_order(&slots[idx].sells[i]);
-            }
-            state.ResumeTiming();
-        }
+        buy_orders[s] = make_order(next_id++, Side::BUY,
+                                   100'000'000 + (s * levels + levels - 1) * 100'000, levels);
     }
 
+    // 重置订单、新建订单簿并挂好卖单；旧订单簿在这里析构，都在暂停计时内
+    std::unique_ptr<OrderBook> book;
+    auto rebuild_book = [&]() {
+        book = std::make_unique<OrderBook>("BTCUSD");
+        for (auto& o : sell_orders) {
+            reset(o);
+            book->add_order(&o);
+        }
+        for (auto& o : buy_orders) reset(o);
+    };
+    rebuild_book();
+
+    int idx = 0;
+    int64_t matched = 0;
+    for (auto _ : state) {
+        if (idx == sweeps) {
+            state.PauseTiming();
+            rebuild_book();
+            state.ResumeTiming();
+            idx = 0;
+        }
+
+        // 计时范围：仅含扫穿撮合逻辑
+        auto trades = book->add_order(&buy_orders[idx]);
+        matched += static_cast<int64_t>(trades.size());
+        benchmark::DoNotOptimize(trades);
+        ++idx;
+    }
+
+    state.counters["trades_per_iteration"] =
+        benchmark::Counter(static_cast<double>(matched), benchmark::Counter::kAvgIterations);
+    if (matched != state.iterations() * levels) state.SkipWithError("an iteration did not sweep every level");
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 // 分别测试扫穿 1、5、10、20 个价格档位
