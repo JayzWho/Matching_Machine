@@ -11,7 +11,7 @@ All four are built from `benchmarks/` by the Release configuration.
 
 | Binary | Benchmarks | Threads | Runs on |
 |---|---|---|---|
-| `bench_order_book` | Add, match, sweep, cancel and mixed workload on the order book (8) | 1 | the first measurement core |
+| `bench_order_book` | Add, match, sweep, cancel and mixed workload (8), each on the current order book and on the one from before the optimizations | 1 | the first measurement core |
 | `bench_spsc_ring_buffer` | Ring buffer push and pop (2); producer to consumer over the SPSC ring buffer (3) and over a mutex queue (2), each on 16 memory regions in both thread placements | 1, then 2 | both measurement cores: each two-thread benchmark pins the producer to one and the consumer to the other, in both assignments |
 | `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline, and a latency report of queue time and service time | 2 | both measurement cores: the producer thread on the lower-numbered, the consumer on the higher |
 | `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report of queue time and service time | 2 | as `bench_matching_engine` |

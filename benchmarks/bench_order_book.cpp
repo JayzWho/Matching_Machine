@@ -1,7 +1,7 @@
 /**
  * bench_order_book.cpp
  *
- * Google Benchmark 套件：测量 OrderBook 的撮合延迟与吞吐量。
+ * Google Benchmark 套件：测量订单簿的撮合延迟与吞吐量。
  *
  * 测量场景：
  *   1. BM_AddOrder_NoMatch       — 纯挂单，无撮合（测基础插入开销）
@@ -9,6 +9,11 @@
  *   3. BM_AddOrder_SweepLevels   — 大单扫穿多个价格档位（最坏情况）
  *   4. BM_CancelOrder            — 撤单操作延迟
  *   5. BM_MixedWorkload          — 混合流量（70% 挂单 + 20% 成交 + 10% 撤单）
+ *
+ * 每个场景是一个以订单簿类型为参数的模板，登记两次、紧挨着运行：名字以 _V3 结尾的
+ * 用当前的订单簿（me::OrderBook），以 _V1 结尾的用优化前的订单簿（me_v1::OrderBookV1，
+ * 见 order_book_v1.h）。两者走同一段基准代码，都调用 add_order / cancel_order，
+ * 结果可以直接对比"优化前后"。
  *
  * 运行方式（必须用 Release 模式，Debug 数据无参考价值）：
  *   cmake --build build/release -j$(nproc)
@@ -23,9 +28,11 @@
 #include <random>
 #include <vector>
 #include "order_book.h"
+#include "order_book_v1.h"
 #include "feed_simulator.h"
 
 using namespace me;
+using me_v1::OrderBookV1;
 
 // ── 辅助工具 ────────────────────────────────────────────────────────────────
 
@@ -54,17 +61,20 @@ static void reset(Order& o) {
 
 // ── 1. 纯挂单，无撮合 ────────────────────────────────────────────────────────
 // 测量在无法成交时（买价始终低于卖价），add_order 的纯挂单开销。
-// 这是 OrderBook 操作的下界延迟。
+// 这是订单簿操作的下界延迟。
 //
 // 设计说明：
 //   - 预生成订单列表，避免循环内 make_order 构造开销混入计时。
-//   - 每 kBatchSize 次迭代在 PauseTiming 内重建 OrderBook（重挂固定背景卖单
+//   - 每 kBatchSize 次迭代在 PauseTiming 内重建订单簿（重挂固定背景卖单
 //     并清空累积的买单），保证每次 add_order 面对的树深度恒定在 kBgDepth，
 //     测出的是"稳态固定深度下的插入延迟"。
 //   - 不固定 Iterations，让框架自动决定（误差 < 0.5% 才停），结果更可信。
+//   - 当前订单簿的 add_order 在撮合前先为成交记录预留空间（trades.reserve(4)），即使不成交，
+//     计时区里每次也有一次 malloc/free；v1 不预留，不成交就不分配。
+template <class Book>
 static void BM_AddOrder_NoMatch(benchmark::State& state) {
     constexpr int kBgDepth   = 100;   // 背景卖单档位数（固定盘口深度）
-    constexpr int kBatchSize = 1000;  // 每批重建一次 OrderBook
+    constexpr int kBatchSize = 1000;  // 每批重建一次订单簿
 
     // 预生成背景卖单（ask 从 101 开始）
     std::vector<Order> bg_sells(kBgDepth);
@@ -81,10 +91,10 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
                                    Side::BUY, 99'000'000, 1);
     }
 
-    // 用 unique_ptr 持有 OrderBook，以便在 PauseTiming 内重建
-    // （OrderBook 含 std::mutex，不可直接移动赋值）
+    // 用 unique_ptr 持有订单簿，以便在 PauseTiming 内重建
+    // （OrderBookV1 含 std::mutex，不可直接移动赋值）
     auto rebuild_book = [&]() {
-        auto b = std::make_unique<OrderBook>("BTCUSD");
+        auto b = std::make_unique<Book>("BTCUSD");
         for (int i = 0; i < kBgDepth; ++i) b->add_order(&bg_sells[i]);
         return b;
     };
@@ -108,7 +118,8 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
-BENCHMARK(BM_AddOrder_NoMatch);
+BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, OrderBook)->Name("BM_AddOrder_NoMatch_V3");
+BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, OrderBookV1)->Name("BM_AddOrder_NoMatch_V1");
 
 // ── 2. 一对一精确成交 ────────────────────────────────────────────────────────
 // 每次迭代：一张买单与一张数量相同的卖单完全成交。卖单是它所在价格档位的唯一订单，
@@ -120,6 +131,7 @@ BENCHMARK(BM_AddOrder_NoMatch);
 //     以第 i 档的价格下单，更低的档位已被前面的买单吃掉，它正好与第 i 档那张卖单成交。
 //   - 计数器 trades_per_iteration 是每次迭代的成交笔数，应恰为 1；不是 1 时报错。
 //   - 不固定 Iterations，由框架自动决定。
+template <class Book>
 static void BM_AddOrder_FullMatch(benchmark::State& state) {
     constexpr int kBatchSize = 1000;
 
@@ -133,9 +145,9 @@ static void BM_AddOrder_FullMatch(benchmark::State& state) {
     }
 
     // 重置订单、新建订单簿并挂好卖单；旧订单簿在这里析构，都在暂停计时内
-    std::unique_ptr<OrderBook> book;
+    std::unique_ptr<Book> book;
     auto rebuild_book = [&]() {
-        book = std::make_unique<OrderBook>("BTCUSD");
+        book = std::make_unique<Book>("BTCUSD");
         for (int i = 0; i < kBatchSize; ++i) {
             reset(sell_orders[i]);
             reset(buy_orders[i]);
@@ -166,7 +178,8 @@ static void BM_AddOrder_FullMatch(benchmark::State& state) {
     if (matched != state.iterations()) state.SkipWithError("an iteration did not match exactly one order");
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
-BENCHMARK(BM_AddOrder_FullMatch);
+BENCHMARK_TEMPLATE(BM_AddOrder_FullMatch, OrderBook)->Name("BM_AddOrder_FullMatch_V3");
+BENCHMARK_TEMPLATE(BM_AddOrder_FullMatch, OrderBookV1)->Name("BM_AddOrder_FullMatch_V1");
 
 // ── 3. 大单扫穿多档（最坏情况） ──────────────────────────────────────────────
 // 测试参数化：state.range(0) 控制被扫穿的价格档位数 L。
@@ -178,6 +191,7 @@ BENCHMARK(BM_AddOrder_FullMatch);
 //     第 s 次迭代的买单以第 s 组 L 档里最高的价格下单，更低的档位已被前面的买单吃掉，
 //     它正好吃完这一组 L 档后全部成交。
 //   - 计数器 trades_per_iteration 应恰为 L；不是 L 时报错。
+template <class Book>
 static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     const int levels = static_cast<int>(state.range(0));
     const int sweeps = 1000 / levels;  // 每批的迭代次数
@@ -195,9 +209,9 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     }
 
     // 重置订单、新建订单簿并挂好卖单；旧订单簿在这里析构，都在暂停计时内
-    std::unique_ptr<OrderBook> book;
+    std::unique_ptr<Book> book;
     auto rebuild_book = [&]() {
-        book = std::make_unique<OrderBook>("BTCUSD");
+        book = std::make_unique<Book>("BTCUSD");
         for (auto& o : sell_orders) {
             reset(o);
             book->add_order(&o);
@@ -229,7 +243,8 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 // 分别测试扫穿 1、5、10、20 个价格档位
-BENCHMARK(BM_AddOrder_SweepLevels)->Arg(1)->Arg(5)->Arg(10)->Arg(20);
+BENCHMARK_TEMPLATE(BM_AddOrder_SweepLevels, OrderBook)->Name("BM_AddOrder_SweepLevels_V3")->Arg(1)->Arg(5)->Arg(10)->Arg(20);
+BENCHMARK_TEMPLATE(BM_AddOrder_SweepLevels, OrderBookV1)->Name("BM_AddOrder_SweepLevels_V1")->Arg(1)->Arg(5)->Arg(10)->Arg(20);
 
 // ── 4. 撤单操作延迟 ──────────────────────────────────────────────────────────
 // 每次迭代撤掉一张挂着的买单。它是所在价格档位的唯一订单，撤掉后这一档被删除。
@@ -240,6 +255,7 @@ BENCHMARK(BM_AddOrder_SweepLevels)->Arg(1)->Arg(5)->Arg(10)->Arg(20);
 //     背景买单，两者价格交错、一档一张。背景买单不撤，让一批里订单簿始终有 kBatchSize 档以上。
 //   - 待撤订单按一个固定的乱序撤，撤单不总落在最优价或最差价一端。
 //   - 计数器 cancels_per_iteration 应恰为 1；有撤单失败时报错。
+template <class Book>
 static void BM_CancelOrder(benchmark::State& state) {
     constexpr int kBatchSize = 1000;
 
@@ -255,9 +271,9 @@ static void BM_CancelOrder(benchmark::State& state) {
     for (int i = 0; i < kBatchSize; ++i) cancel_ids[i] = targets[i].order_id;
     std::shuffle(cancel_ids.begin(), cancel_ids.end(), std::mt19937_64(42));
 
-    std::unique_ptr<OrderBook> book;
+    std::unique_ptr<Book> book;
     auto rebuild_book = [&]() {
-        book = std::make_unique<OrderBook>("BTCUSD");
+        book = std::make_unique<Book>("BTCUSD");
         for (int i = 0; i < kBatchSize; ++i) {
             reset(targets[i]);
             book->add_order(&background[i]);
@@ -286,29 +302,31 @@ static void BM_CancelOrder(benchmark::State& state) {
     if (cancelled != state.iterations()) state.SkipWithError("a cancel did not find its order");
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
-BENCHMARK(BM_CancelOrder);
+BENCHMARK_TEMPLATE(BM_CancelOrder, OrderBook)->Name("BM_CancelOrder_V3");
+BENCHMARK_TEMPLATE(BM_CancelOrder, OrderBookV1)->Name("BM_CancelOrder_V1");
 
 // ── 5. 混合流量（模拟真实场景） ───────────────────────────────────────────────
 // 使用 FeedSimulator 生成真实分布的订单序列（限价单 + 撤单混合）
-// 并批量送入 OrderBook，测量平均每笔订单的处理吞吐量。
+// 并批量送入订单簿，测量平均每笔订单的处理吞吐量。
 //
 // 设计说明：
 //   - 每次迭代在暂停计时内重置全部订单的状态、新建订单簿（上一次迭代的订单簿在这里析构），
 //     所以每次迭代从空订单簿开始处理同一串订单，做的事完全相同。
 //   - 计数器 trades_per_iteration 是每次迭代的成交笔数；各次迭代不相同时报错。
+template <class Book>
 static void BM_MixedWorkload(benchmark::State& state) {
     // 预生成订单（不计入 benchmark 时间）
     FeedSimulator sim("BTCUSD", 100'000'000, /*cancel_ratio=*/0.1, /*seed=*/42);
     auto orders = sim.generate_random(1000'000);
     for (auto& o : orders) o.timestamp_ns = 1;  // 生成的时间戳为 0，原因见 make_order
 
-    std::unique_ptr<OrderBook> book;
+    std::unique_ptr<Book> book;
     int64_t first_trades = -1;
     bool same_every_iteration = true;
     for (auto _ : state) {
         state.PauseTiming();
         for (auto& o : orders) reset(o);
-        book = std::make_unique<OrderBook>("BTCUSD");
+        book = std::make_unique<Book>("BTCUSD");
         state.ResumeTiming();
 
         int64_t total_trades = 0;
@@ -332,4 +350,5 @@ static void BM_MixedWorkload(benchmark::State& state) {
         static_cast<int64_t>(state.iterations()) *
         static_cast<int64_t>(orders.size()));
 }
-BENCHMARK(BM_MixedWorkload)->Iterations(5);
+BENCHMARK_TEMPLATE(BM_MixedWorkload, OrderBook)->Name("BM_MixedWorkload_V3")->Iterations(5);
+BENCHMARK_TEMPLATE(BM_MixedWorkload, OrderBookV1)->Name("BM_MixedWorkload_V1")->Iterations(5);
