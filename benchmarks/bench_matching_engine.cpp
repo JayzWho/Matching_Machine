@@ -5,7 +5,8 @@
  *
  * 测量场景：
  *   1. BM_Pipeline_Throughput    — 完整 SPSC 流水线的订单吞吐量（orders/s）
- *   2. BM_SingleThread_Baseline  — 单线程 add_order_noalloc 基线（对比用）
+ *   2. BM_SingleThread_Baseline  — 单线程 add_order_noalloc 基线（对比用），
+ *      BM_SingleThread_Baseline_AddOrder 是它的 add_order 版本（同一串订单）
  *   3. BM_Pipeline_LatencyReport — 排队时间、服务时间的分布报告（P50/P99，TSC ticks）
  *
  * 运行方式（必须用 Release 模式，绑核以减少调度抖动）：
@@ -88,14 +89,24 @@ BENCHMARK(BM_Pipeline_Throughput)
     ->Iterations(3)    // 减少迭代次数（每次都要启停线程）
     ->UseRealTime();   // 计时的主线程只在 join 里等待，CPU 时间近乎为 0；吞吐必须按墙钟时间算
 
-// ─── 3. 单线程 add_order_noalloc 基线（无线程切换开销）────────────────────
+// ─── 3. 单线程基线：add_order_noalloc 与 add_order 成对 ──────────────────────
 //
-// 直接在当前线程循环调用 add_order_noalloc，测量撮合核心路径本身的吞吐量。
+// 直接在当前线程循环送入订单，测量撮合核心路径本身的吞吐量。
 // 与 BM_Pipeline_Throughput 对比，可量化 SPSC 队列和线程同步的额外开销。
 //
-// 数据来源：FeedSimulator 预生成，避免生成逻辑混入计时。
+// 同一串订单走两种接口，登记为两个基准：
+//   - BM_SingleThread_Baseline：add_order_noalloc（流水线消费者用的接口），成交写进预分配的
+//     环形缓冲，撤单也由它处理；
+//   - BM_SingleThread_Baseline_AddOrder：add_order 下单、cancel_order 撤单，每次下单返回一个
+//     装成交记录的 vector。
+// 除接口外两者完全相同，差值就是 noalloc 接口省下的成本。
+//
+// 数据来源：FeedSimulator 预生成，避免生成逻辑混入计时。每次迭代在暂停计时内清空订单簿、
+// 重置订单状态，从空订单簿处理同一串订单；计数器 trades_per_iteration 是每次迭代的成交笔数，
+// 各次迭代不相同时报错。
 
-static void BM_SingleThread_Baseline(benchmark::State& state) {
+template <bool kNoalloc>
+static void BM_SingleThread(benchmark::State& state) {
     constexpr size_t kBatchSize  = 10'000;
     constexpr double kCancelRatio = 0.2;
 
@@ -110,8 +121,11 @@ static void BM_SingleThread_Baseline(benchmark::State& state) {
     TradeRingBuffer<kTradeBufCap> trade_buf;
     OrderBook book("BTCUSD");
 
+    int64_t first_trades = -1;
+    bool same_every_iteration = true;
     for (auto _ : state) {
         state.PauseTiming();
+        trade_buf.drain([](const Trade&) {});  // 清空上一次迭代的成交记录
         book.clear();
         // 重置订单状态（每次迭代重用同一批数据）
         for (auto& o : orders) {
@@ -120,23 +134,42 @@ static void BM_SingleThread_Baseline(benchmark::State& state) {
         }
         state.ResumeTiming();
 
-        for (auto& o : orders) {
-            book.add_order_noalloc(&o, trade_buf, [](Order*) {});
+        int64_t total_trades = 0;
+        if constexpr (kNoalloc) {
+            const size_t written = trade_buf.total_written();
+            for (auto& o : orders) {
+                book.add_order_noalloc(&o, trade_buf, [](Order*) {});
+            }
+            benchmark::DoNotOptimize(trade_buf.size());
+            total_trades = static_cast<int64_t>(trade_buf.total_written() - written);
+        } else {
+            for (auto& o : orders) {
+                if (o.type == OrderType::CANCEL) {
+                    book.cancel_order(o.order_id);
+                } else {
+                    auto trades = book.add_order(&o);
+                    total_trades += static_cast<int64_t>(trades.size());
+                }
+            }
         }
 
-        benchmark::DoNotOptimize(trade_buf.size());
-        state.PauseTiming();
-        trade_buf.drain([](const Trade&) {});  // 清空 trade_buf 以便下次迭代
-        state.ResumeTiming();
+        if (first_trades < 0) first_trades = total_trades;
+        same_every_iteration = same_every_iteration && total_trades == first_trades;
     }
 
+    state.counters["trades_per_iteration"] = static_cast<double>(first_trades);
+    if (!same_every_iteration) state.SkipWithError("iterations produced different numbers of trades");
     state.SetItemsProcessed(
         state.iterations() * static_cast<int64_t>(kBatchSize)
     );
-    state.SetLabel("single-thread noalloc");
+    state.SetLabel(kNoalloc ? "single-thread noalloc" : "single-thread add_order");
 }
 
-BENCHMARK(BM_SingleThread_Baseline)
+BENCHMARK_TEMPLATE(BM_SingleThread, true)
+    ->Name("BM_SingleThread_Baseline")
+    ->Unit(benchmark::kMicrosecond);
+BENCHMARK_TEMPLATE(BM_SingleThread, false)
+    ->Name("BM_SingleThread_Baseline_AddOrder")
     ->Unit(benchmark::kMicrosecond);
 
 // ─── 4. 延迟报告：benchmark 结束后打印 P50/P99 ──────────────────────────────
