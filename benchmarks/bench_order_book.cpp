@@ -44,6 +44,12 @@ static Order make_order(uint64_t id, Side side, int64_t price, int64_t qty) {
     return o;
 }
 
+// 让订单回到送入订单簿之前的状态，同一批订单对象可以再送入一个新的订单簿
+static void reset(Order& o) {
+    o.filled_qty = 0;
+    o.status     = OrderStatus::NEW;
+}
+
 // ── 1. 纯挂单，无撮合 ────────────────────────────────────────────────────────
 // 测量在无法成交时（买价始终低于卖价），add_order 的纯挂单开销。
 // 这是 OrderBook 操作的下界延迟。
@@ -103,43 +109,59 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
 BENCHMARK(BM_AddOrder_NoMatch);
 
 // ── 2. 一对一精确成交 ────────────────────────────────────────────────────────
-// 每次迭代：先挂一个卖单，再来一个完全匹配的买单，触发精确成交。
-// 这是最典型的热路径场景。
+// 每次迭代：一张买单与一张数量相同的卖单完全成交。卖单是它所在价格档位的唯一订单，
+// 成交后这一档被删除。这是最典型的热路径场景。
 //
 // 设计说明：
-//   - 预生成 sell/buy 配对列表，消除循环内 make_order 的构造开销。
-//   - 每次迭代在 PauseTiming 内挂卖单（准备成交对手方），
-//     计时范围精确限定在买单触发撮合的 add_order 调用上。
+//   - 与 NoMatch 相同的批量模式：每 kBatchSize 次迭代暂停计时一次，在暂停内重置这一批订单的
+//     状态、新建订单簿、挂好 kBatchSize 张卖单（价格逐档升高，一档一张）。第 i 次迭代的买单
+//     以第 i 档的价格下单，更低的档位已被前面的买单吃掉，它正好与第 i 档那张卖单成交。
+//   - 计数器 trades_per_iteration 是每次迭代的成交笔数，应恰为 1；不是 1 时报错。
 //   - 不固定 Iterations，由框架自动决定。
 static void BM_AddOrder_FullMatch(benchmark::State& state) {
-    constexpr int kBatchSize = 10'000;
+    constexpr int kBatchSize = 1000;
 
     // 预生成卖单和买单（id 区间错开，互不冲突）
     std::vector<Order> sell_orders(kBatchSize);
     std::vector<Order> buy_orders(kBatchSize);
     for (int i = 0; i < kBatchSize; ++i) {
-        sell_orders[i] = make_order(static_cast<uint64_t>(30000 + i),
-                                    Side::SELL, 100'000'000, 10);
-        buy_orders[i]  = make_order(static_cast<uint64_t>(40000 + i),
-                                    Side::BUY,  100'000'000, 10);
+        const int64_t price = 100'000'000 + i * 100'000;
+        sell_orders[i] = make_order(static_cast<uint64_t>(30000 + i), Side::SELL, price, 10);
+        buy_orders[i]  = make_order(static_cast<uint64_t>(40000 + i), Side::BUY,  price, 10);
     }
 
-    OrderBook book("BTCUSD");
-    int idx = 0;
-    for (auto _ : state) {
-        if (idx == kBatchSize) idx = 0;
+    // 重置订单、新建订单簿并挂好卖单；旧订单簿在这里析构，都在暂停计时内
+    std::unique_ptr<OrderBook> book;
+    auto rebuild_book = [&]() {
+        book = std::make_unique<OrderBook>("BTCUSD");
+        for (int i = 0; i < kBatchSize; ++i) {
+            reset(sell_orders[i]);
+            reset(buy_orders[i]);
+            book->add_order(&sell_orders[i]);
+        }
+    };
+    rebuild_book();
 
-        // PauseTiming：挂卖单（准备对手方），不计入撮合延迟
-        state.PauseTiming();
-        book.add_order(&sell_orders[idx]);
-        state.ResumeTiming();
+    int idx = 0;
+    int64_t matched = 0;
+    for (auto _ : state) {
+        if (idx == kBatchSize) {
+            state.PauseTiming();
+            rebuild_book();
+            state.ResumeTiming();
+            idx = 0;
+        }
 
         // 计时范围：买单触发撮合
-        auto trades = book.add_order(&buy_orders[idx]);
+        auto trades = book->add_order(&buy_orders[idx]);
+        matched += static_cast<int64_t>(trades.size());
         benchmark::DoNotOptimize(trades);
         ++idx;
     }
 
+    state.counters["trades_per_iteration"] =
+        benchmark::Counter(static_cast<double>(matched), benchmark::Counter::kAvgIterations);
+    if (matched != state.iterations()) state.SkipWithError("an iteration did not match exactly one order");
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 BENCHMARK(BM_AddOrder_FullMatch);
