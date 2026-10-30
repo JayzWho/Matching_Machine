@@ -227,6 +227,19 @@ foreach(bench_target
   )
 endforeach()
 
+# 单线程基准自带的检查：每次迭代是否真的成交、撤单是否找到订单、各次迭代的成交笔数是否相同。
+# 不通过的基准报错，Google Benchmark 输出 "ERROR OCCURRED"。这里每个基准短跑一遍，有报错即失败。
+# MixedWorkload 每次迭代重放 100 万笔订单，带 sanitizer 时要跑一分多钟，只在不带 sanitizer 的构建里跑。
+set(bench_check_args --benchmark_min_time=0.01s)
+if(CMAKE_CXX_FLAGS_${ME_BUILD_TYPE_UPPER} MATCHES "-fsanitize=")
+  list(APPEND bench_check_args --benchmark_filter=-MixedWorkload)
+endif()
+add_test(NAME bench_order_book_checks COMMAND bench_order_book ${bench_check_args})
+add_test(NAME bench_single_thread_checks
+         COMMAND bench_matching_engine --benchmark_filter=SingleThread --benchmark_min_time=0.01s)
+set_tests_properties(bench_order_book_checks bench_single_thread_checks PROPERTIES
+  FAIL_REGULAR_EXPRESSION "ERROR OCCURRED")
+
 # TSC 频率标定（对照 CLOCK_MONOTONIC），由 scripts/env/capture_env.sh 调用，
 # 结果写进每次录制的环境记录。测试只检查它能运行并打印出频率。
 add_executable(tsc_calibrate scripts/env/tsc_calibrate.cpp)

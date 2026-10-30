@@ -412,10 +412,16 @@ def intervals(out, marks):
 
 
 def samples(json_path):
-    """Per repetition: (benchmark, repetition, real ns, CPU ns, iterations)."""
+    """Per repetition: (benchmark, repetition, real ns, CPU ns, iterations).
+
+    Raises ValueError when a benchmark reported an error, for example a failed
+    check of the work its iterations did: its times are not a measurement."""
     ns = {"ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9}
     with open(json_path) as fh:
         data = json.load(fh)
+    errors = [f"{b['name']}: {b.get('error_message', '')}" for b in data["benchmarks"] if b.get("error_occurred")]
+    if errors:
+        raise ValueError(f"{json_path}: benchmarks reported errors: {'; '.join(errors)}")
     return [(b["run_name"], b["repetition_index"], b["real_time"] * ns[b["time_unit"]],
              b["cpu_time"] * ns[b["time_unit"]], b["iterations"])
             for b in data["benchmarks"] if b["run_type"] == "iteration"]
@@ -517,7 +523,7 @@ class Study:
                "before": self.capture_env(f"s{s}_env_before.json")}
         log(f"session {s}: cores {cores}, housekeeping {sorted(online - measure)}; warm-up")
         subprocess.run(["taskset", "-c", str(cores[0]), str(BUILD / "bench_order_book"),
-                        "--benchmark_filter=BM_AddOrder_NoMatch", f"--benchmark_min_time={o.warmup}s"],
+                        "--benchmark_filter=BM_AddOrder_NoMatch_V3", f"--benchmark_min_time={o.warmup}s"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         for r in range(1, o.rounds + 1):
