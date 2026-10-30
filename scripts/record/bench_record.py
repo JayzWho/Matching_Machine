@@ -517,7 +517,7 @@ class Study:
                "before": self.capture_env(f"s{s}_env_before.json")}
         log(f"session {s}: cores {cores}, housekeeping {sorted(online - measure)}; warm-up")
         subprocess.run(["taskset", "-c", str(cores[0]), str(BUILD / "bench_order_book"),
-                        "--benchmark_filter=BM_AddOrder_NoMatch", f"--benchmark_min_time={o.warmup}s"],
+                        "--benchmark_filter=BM_AddOrder_NoMatch_V3", f"--benchmark_min_time={o.warmup}s"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         for r in range(1, o.rounds + 1):
