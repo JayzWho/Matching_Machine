@@ -17,8 +17,10 @@
  */
 
 #include <benchmark/benchmark.h>
+#include <algorithm>
 #include <cstring>
 #include <memory>
+#include <random>
 #include <vector>
 #include "order_book.h"
 #include "feed_simulator.h"
@@ -230,31 +232,58 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
 BENCHMARK(BM_AddOrder_SweepLevels)->Arg(1)->Arg(5)->Arg(10)->Arg(20);
 
 // ── 4. 撤单操作延迟 ──────────────────────────────────────────────────────────
+// 每次迭代撤掉一张挂着的买单。它是所在价格档位的唯一订单，撤掉后这一档被删除。
+//
+// 设计说明：
+//   - 与 NoMatch 相同的批量模式：每 kBatchSize 次迭代暂停计时一次，在暂停内重置待撤订单的
+//     状态、新建订单簿（旧订单簿在这里析构）、挂好 kBatchSize 张待撤买单和 kBatchSize 张
+//     背景买单，两者价格交错、一档一张。背景买单不撤，让一批里订单簿始终有 kBatchSize 档以上。
+//   - 待撤订单按一个固定的乱序撤，撤单不总落在最优价或最差价一端。
+//   - 计数器 cancels_per_iteration 应恰为 1；有撤单失败时报错。
 static void BM_CancelOrder(benchmark::State& state) {
-    // 预分配订单存储，避免 benchmark 循环中 vector 重分配
-    constexpr size_t kBatchSize = 10'00;
-    std::vector<Order> orders(kBatchSize);
+    constexpr int kBatchSize = 1000;
 
-    uint64_t id = 1;
-    size_t idx = 0;
+    std::vector<Order> targets(kBatchSize);
+    std::vector<Order> background(kBatchSize);
+    for (int i = 0; i < kBatchSize; ++i) {
+        background[i] = make_order(static_cast<uint64_t>(2 * i + 1), Side::BUY,
+                                   99'000'000 - (2 * i) * 1000, 1);
+        targets[i]    = make_order(static_cast<uint64_t>(2 * i + 2), Side::BUY,
+                                   99'000'000 - (2 * i + 1) * 1000, 1);
+    }
+    std::vector<uint64_t> cancel_ids(kBatchSize);
+    for (int i = 0; i < kBatchSize; ++i) cancel_ids[i] = targets[i].order_id;
+    std::shuffle(cancel_ids.begin(), cancel_ids.end(), std::mt19937_64(42));
 
-    for (auto _ : state) {
-        state.PauseTiming();
-        OrderBook book("BTCUSD");
-        // 先批量挂单
-        for (size_t i = 0; i < kBatchSize; ++i) {
-            orders[i] = make_order(id++, Side::BUY,
-                                   99'000'000 - static_cast<int64_t>(i) * 1000, 1);
-            book.add_order(&orders[i]);
+    std::unique_ptr<OrderBook> book;
+    auto rebuild_book = [&]() {
+        book = std::make_unique<OrderBook>("BTCUSD");
+        for (int i = 0; i < kBatchSize; ++i) {
+            reset(targets[i]);
+            book->add_order(&background[i]);
+            book->add_order(&targets[i]);
         }
-        state.ResumeTiming();
+    };
+    rebuild_book();
 
-        // 测量撤单
-        bool ok = book.cancel_order(orders[idx % kBatchSize].order_id);
-        benchmark::DoNotOptimize(ok);
+    int idx = 0;
+    int64_t cancelled = 0;
+    for (auto _ : state) {
+        if (idx == kBatchSize) {
+            state.PauseTiming();
+            rebuild_book();
+            state.ResumeTiming();
+            idx = 0;
+        }
+
+        // 计时范围：撤单
+        cancelled += book->cancel_order(cancel_ids[idx]) ? 1 : 0;
         ++idx;
     }
 
+    state.counters["cancels_per_iteration"] =
+        benchmark::Counter(static_cast<double>(cancelled), benchmark::Counter::kAvgIterations);
+    if (cancelled != state.iterations()) state.SkipWithError("a cancel did not find its order");
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
 BENCHMARK(BM_CancelOrder);
