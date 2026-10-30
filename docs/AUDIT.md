@@ -1,41 +1,47 @@
 # Benchmark Methodology Audit
 
-**Status:** in progress · **Opened:** 2026-09-20 · **Audited revision:** `929e0db` (tag `v1.0-vm-era`)
+**Status:** closed · **Opened:** 2026-09-20 · **Closed:** 2026-10-30 · **Audited revision:** `929e0db` (tag `v1.0-vm-era`)
 
 ---
 
 ## 1. Purpose
 
-This document records a methodology audit of the performance claims published in
-`README.md` section 4. It exists because those claims were produced on a cloud VM
-that has since been decommissioned, and because a review of the benchmark sources
-found defects that make several of the published numbers measure something other
-than what they are labelled as.
+This document records a methodology audit of the performance claims that
+`README.md` section 4 published until the tag `v1.0-vm-era`. It exists because
+those claims were produced on a cloud VM that has since been decommissioned, and
+because a review of the benchmark sources found defects that make several of the
+published numbers measure something other than what they are labelled as.
 
 The audit is published rather than quietly fixed, for two reasons. The numbers are
 already public, so silently replacing them would be worse than annotating them. And
 the reasoning that identifies a bad benchmark is the same reasoning the project is
 meant to demonstrate in the first place.
 
-Nothing in the historical record is lost. Raw evidence recovered from git history
-is archived under `docs/evidence/historical_vm/`. File and line references below
-are to the audited revision. Files cited here that have since left the tree
-(`learning_notes/`, `docs/optimization_log.md`, `scripts/run_perf.sh`) are kept at
-the tag `archive/pre-cleanup-2026-10`.
+The audit is closed. The defects behind the published numbers have been fixed,
+the claims have been removed from `README.md`, and README section 4 now reports
+the fixed benchmarks on the current machine. Section 3 gives the outcome of each
+claim and section 7 the remediation as it was carried out.
+
+Nothing in the historical record is lost. The README as audited is kept at the
+tag `v1.0-vm-era`. File and line references below are to the audited revision.
+Files cited here that have since left the tree are kept at tags:
+`learning_notes/`, `docs/optimization_log.md` and `scripts/run_perf.sh` at
+`archive/pre-cleanup-2026-10`, and `docs/evidence/historical_vm/` at
+`archive/control-2026-10-15`.
 
 ---
 
 ## 2. Measurement environments
 
-| | Historical (published numbers) | Current (re-benchmark target) |
+| | Historical (published numbers) | Current |
 |---|---|---|
 | Machine | Tencent Cloud Ubuntu VM `VM-0-3-ubuntu` | HP laptop, Ubuntu |
 | CPU | 2 vCPU @ 2494 MHz | Intel Core i5-1135G7, 4C/8T |
-| Frequency | fixed (`cpu_scaling_enabled: false`) | 400 MHz – 4.2 GHz, turbo enabled, `powersave` governor |
+| Frequency | fixed (`cpu_scaling_enabled: false`) | 400 MHz – 4.2 GHz; measured pinned at the 2.4 GHz base, turbo off |
 | L3 | 37.4 MB (shared by 2 vCPU) | 8 MB (shared by 8 threads) |
 | SMT topology | not observable | core0={cpu0,cpu4}, core1={cpu1,cpu5}, … |
 | Hardware PMU | unavailable (virtualized) | available (`arch_perfmon`, `pebs`, `intel_pt`) |
-| TSC | `constant_tsc`, assumed 2.494 GHz | `constant_tsc nonstop_tsc tsc_known_freq`, frequency requires calibration |
+| TSC | `constant_tsc`, assumed 2.494 GHz | `constant_tsc nonstop_tsc tsc_known_freq`, calibrated at about 2.419 GHz |
 | Status | **decommissioned — not reproducible** | active |
 
 The two environments differ in core count, cache hierarchy, L3 capacity and frequency
@@ -46,21 +52,27 @@ difference between them may be described as a code-level speedup.
 
 ## 3. Status of published claims
 
-| Claim (README §4) | Status |
-|---|---|
-| §4.1 `BM_AddOrder_NoMatch` 83.5 → 46.4 ns | **Questionable** — measurement method broadly sound, but includes an unconditional `malloc`/`free` pair, and the two columns were produced with different benchmark code |
-| §4.1 `BM_CancelOrder` 60,456 → 26,659 ns | **Withdrawn** — the timed region includes `~OrderBook()` (C3) |
-| §4.1 `BM_AddOrder_SweepLevels/20` 3,093 → 2,297 ns | **Magnitude unreliable** — ~800 ns fixed pedestal from `PauseTiming` (C4) |
-| §4.1 `BM_MixedWorkload` 3.87 → 6.19 M ops/s (+60%) | **Withdrawn** — cross-iteration state contamination (C2) |
-| §4.1 "latency stddev / CV" | **Mislabelled** — run-to-run batch variability, not per-order jitter |
-| "hash map 32% → 12% (perf measured)" | **Evidence chain broken** — profiled the contaminated benchmark, with unreliable frame-pointer stacks |
-| §4.2 throughput 1.19 → 3.15 M/s (2.65×) | **Stands** — correctly derived from `real_time`; requires re-measurement on the new machine |
-| §4.3 P50/P95/P99/P999 latency table | **Values real, interpretation wrong** — measures queueing delay, not service latency (C1) |
-| §4.3 "bare-metal SPSC P50 typically reaches 200–800 ns" | **Withdrawn** — not achievable under the current design (C1) |
-| §4.4 noalloc +30% (6.19 → 8.04 M ops/s) | **Withdrawn** — compares two different workloads (C5) |
-| §5 "33 GTest cases … FeedSimulator" | **Incorrect** — 44 cases; no FeedSimulator test target exists. Corrected in phase 1 |
-| §5 "abseil-cpp pulled automatically" | **Incorrect** — `find_package(absl REQUIRED)`. Corrected in phase 1 |
-| §3 "cross-thread latency safe under SPSC acquire/release" | **Conceptually wrong** — acquire/release governs visibility, not TSC comparability across cores |
+The claims are those of the README at the tag `v1.0-vm-era`. "Removed" means the
+claim no longer appears in the README.
+
+| Claim | Finding | Outcome |
+|---|---|---|
+| §4.1 `BM_AddOrder_NoMatch` 83.5 → 46.4 ns | **Questionable** — includes an unconditional `malloc`/`free` pair, and the two columns were produced with different benchmark code | Both order books now run the same benchmark code (#20). The pair remains in the current book's timed region; README §4.1 says so |
+| §4.1 `BM_CancelOrder` 60,456 → 26,659 ns | **Withdrawn** — the timed region includes `~OrderBook()` (C5) | Fixed (#20) |
+| §4.1 `BM_AddOrder_SweepLevels/20` 3,093 → 2,297 ns | **Magnitude unreliable** — ~800 ns fixed pedestal from `PauseTiming` (C4) | Fixed (#20) |
+| §4.1 `BM_MixedWorkload` 3.87 → 6.19 M ops/s (+60%) | **Withdrawn** — cross-iteration state contamination (C2) | Fixed (#20) |
+| §4.1 "latency stddev / CV" | **Mislabelled** — run-to-run batch variability, not per-order jitter | Removed |
+| "hash map 32% → 12% (perf measured)" | **Evidence chain broken** — profiled the contaminated benchmark, with unreliable frame-pointer stacks | Removed |
+| §4.2 throughput 1.19 → 3.15 M/s (2.65×) | **Stands** — correctly derived from `real_time` | Re-measured on the current machine (README §4.2) |
+| §4.3 P50/P95/P99/P999 latency table | **Values real, interpretation wrong** — measures queueing delay, not service latency (C1) | Fixed (#18): queue time and service time are reported separately |
+| §4.3 "bare-metal SPSC P50 typically reaches 200–800 ns" | **Withdrawn** — not achievable under the current design (C1) | Removed |
+| §4.4 noalloc +30% (6.19 → 8.04 M ops/s) | **Withdrawn** — compares two different workloads (section 5) | Replaced by the two interfaces on one workload (#20) |
+| §5 "33 GTest cases … FeedSimulator" | **Incorrect** — 44 cases; no FeedSimulator test target exists | Corrected in phase 1 |
+| §5 "abseil-cpp pulled automatically" | **Incorrect** — `find_package(absl REQUIRED)` | Corrected in phase 1 |
+| §3 "cross-thread latency safe under SPSC acquire/release" | **Conceptually wrong** — acquire/release governs visibility, not TSC comparability across cores | Corrected in README §3 |
+
+Pull request numbers refer to
+[github.com/JayzWho/Matching_Machine/pulls](https://github.com/JayzWho/Matching_Machine/pulls?q=is%3Apr+is%3Amerged).
 
 ---
 
@@ -100,6 +112,9 @@ separate quantities, and drive the pipeline with a rate-limited (open-loop) gene
 so latency can be reported as a function of offered load rather than as a single
 number taken at saturation.
 
+**Outcome:** both pipelines report queue time and service time separately (#18).
+The open-loop generator is not built (section 7, phase 6).
+
 ### C2 — Cross-iteration state contamination in `BM_MixedWorkload`
 
 `benchmarks/bench_order_book.cpp:267` generates 1,000,000 orders outside the timing
@@ -121,6 +136,10 @@ changes being measured.
 This also invalidates the profiling evidence, because `scripts/run_perf.sh` samples
 this benchmark.
 
+**Outcome:** every iteration resets all orders and builds a new book while the
+timers are paused, and the benchmark reports an error if two iterations produce
+different numbers of trades (#20).
+
 ### C3 — `BM_AddOrder_FullMatch` stops doing work after 10,000 iterations
 
 `benchmarks/bench_order_book.cpp:124` wraps `idx` back to 0 without resetting order
@@ -131,6 +150,10 @@ region contains two hash operations and nothing else.
 This explains the published result directly: "optimized is 7.9% slower, within noise"
 is not noise. Both columns measured an empty loop plus the timing pedestal described
 in C4.
+
+**Outcome:** the book and its orders are rebuilt once per batch of 1,000
+iterations, and the benchmark reports an error unless every iteration produces one
+trade (#20).
 
 ### C4 — `PauseTiming`/`ResumeTiming` imposes an ~800 ns pedestal
 
@@ -152,6 +175,9 @@ benchmark that pauses once per 1,000 iterations reports 46 ns. The ~800 ns is th
 instrument, not the code. It also dilutes the SweepLevels/20 improvement, whose real
 work is closer to 2,297 − 800 ≈ 1,500 ns.
 
+**Outcome:** the three benchmarks pause once per batch of 1,000 iterations, as
+`BM_AddOrder_NoMatch` does (#20).
+
 ### C5 — `BM_CancelOrder` times object destruction
 
 `benchmarks/bench_order_book.cpp:242` declares `OrderBook book` *inside* the loop body.
@@ -167,6 +193,8 @@ to the lazy-deletion change it is cited as evidence for.
 
 `BM_MixedWorkload` has the same structural problem.
 
+**Outcome:** both destroy the old book while the timers are paused (#20).
+
 ### C6 — Hardcoded TSC-to-nanosecond conversion, and incorrect terminology
 
 `bench_matching_engine.cpp:143` and `bench_baseline_mutex.cpp:454` both call
@@ -181,6 +209,11 @@ the code does not implement it.
 **Remediation:** calibrate the TSC against `CLOCK_MONOTONIC` at startup, record the
 calibration and its residual in run metadata, report values as TSC ticks, and remove
 all hardcoded frequency literals.
+
+**Outcome:** every recording calibrates the TSC before and after each session and
+stores the result in `env.json` (#17); the latency reports print TSC ticks and
+read the counter between two `lfence` instructions (#18). No frequency literal
+remains in the sources.
 
 ### C7 — Published numbers have no recoverable raw evidence
 
@@ -198,7 +231,8 @@ all hardcoded frequency literals.
   produced by different benchmark code.
 
 One raw file was recoverable from git history (deleted in `1c35b37`) and is archived at
-`docs/evidence/historical_vm/2026-04-08_bench_order_book_after_opt.json`. It does not
+`docs/evidence/historical_vm/2026-04-08_bench_order_book_after_opt.json`, now at the
+tag `archive/control-2026-10-15`. It does not
 support the published table — it is an earlier and visibly broken generation of the
 benchmark:
 
@@ -218,11 +252,16 @@ Separately, the audited revision did not build: `CMakeLists.txt` required
 `find_package(absl REQUIRED)`, and the audit machine had only the Abseil runtime
 package, not the development package. Phase 1 fixed this.
 
+**Outcome:** every number in README section 4 comes from a recorded study under
+`docs/evidence/` that keeps its raw output, environment record and binary
+checksums.
+
 ---
 
 ## 5. Additional confirmed issues
 
-Tracked with the same rigour but lower blast radius:
+Tracked with the same rigour but lower blast radius. Each item ends with its
+outcome.
 
 - **Memory pool is monotonically consumed.** `cancel_order` never returns the cancelled
   resting order to the pool, the consumer's `OrderBook` is function-local and discards
@@ -230,29 +269,36 @@ Tracked with the same rigour but lower blast radius:
   pool. The producer's allocation loop has no exit condition, so exhaustion is a hang.
   Commit `550a1a5` addressed the symptom by enlarging the pool; `LargeBatch_NoHang` is a
   regression test for the symptom. Also makes the three throughput iterations
-  non-comparable.
+  non-comparable. *Fixed (#17): cancelled orders return to the pool, and `start()`
+  refills it.*
 - **Multithreaded benchmarks do not call `UseRealTime()`.** Google Benchmark normalises
   rate counters by `cpu_time`, which excludes user-spawned threads, producing
   `items_per_second` up to 1.03 G/s in the archived JSON. The narrative text works around
   this by hand; the code does not. `bench_spsc_ring_buffer.cpp` sets it correctly.
+  *Fixed (#17).*
 - **The noalloc +30% comparison changes five variables at once**: working set (1M vs 10K
   orders), cancel ratio (0.1 vs 0.2), the C2 contamination, translation-unit boundary
   (out-of-line call vs header template), and a no-op deallocator that is removable dead
-  code.
+  code. *Replaced (#20) by a pair of benchmarks that run one 10,000-order stream
+  through each interface.*
 - **RDTSC is neither serialised nor fenced against the compiler**, and cross-core TSC
-  comparability is asserted rather than verified.
+  comparability is asserted rather than verified. *Serialised (#18). Cross-core
+  comparability rests on the kernel's check at boot; see `BENCHMARKING.md`.*
 - **`scripts/run_perf.sh` selects the call-graph mode on the wrong criterion** (it picks
   DWARF when permissions are insufficient, and frame pointers otherwise), while the
-  Release build does not pass `-fno-omit-frame-pointer`.
+  Release build does not pass `-fno-omit-frame-pointer`. *The script was removed
+  (#13); hardware-counter evidence is phase 7.*
 - **Thread placement is left to an external `taskset -c 0,1`** with no in-process
   affinity, no SMT sibling awareness, and no `pause` instruction in any spin loop.
   On the current machine both pipeline workers sometimes start on one CPU, which
-  raises the SPSC latency report's P99 several-fold.
+  raises the SPSC latency report's P99 several-fold. *Each benchmark thread is
+  pinned in the process (#17, #18). The spin loops still have no `pause`.*
 - **`BM_SPSC_ProducerConsumer` measures false sharing in its own bookkeeping.** The
   consumer adds every item to a checksum 8 bytes from `N`, on a cache line the
   producer reads for every item. Moving the checksum to its own line makes the
   benchmark about five times faster. All three queue benchmarks also place their
-  queue once per process, so a launch measures one memory placement.
+  queue once per process, so a launch measures one memory placement. *Fixed (#18):
+  the checksum has its own line, and every launch measures 16 memory regions.*
 - **The producer-to-consumer benchmarks leave the state they measure to chance.**
   Under their symmetric full-speed load, the int64 ring runs in one of two
   states: the producer stays ahead, at 8 to 9 ns per item, or the consumer
@@ -264,10 +310,15 @@ Tracked with the same rigour but lower blast radius:
   queue lands in sets the slice, the scheduler sets the CPU, and the benchmark
   controls neither. The Order ring and the mutex queue stay close to the
   caught-up state and slow down continuously with how often their consumer
-  waits, which the same two choices set.
+  waits, which the same two choices set. *A property of the queue, now reported
+  as such (#18): every launch measures 16 memory regions in both thread
+  placements, and the reports give the int64 ring's two levels with the share of
+  slow measurements, and the median and quartiles of the others.*
 - **No repetitions, warm-up or variability reporting** for the pipeline benchmark that
   produces the headline figures, and the current machine runs with a `powersave`
-  governor and turbo enabled.
+  governor and turbo enabled. *Fixed: a control is 32 launches of each program,
+  six repetitions each with the first left out as a warm-up, in a measurement
+  mode with the frequency pinned (`BENCHMARKING.md`).*
 
 ---
 
@@ -300,13 +351,13 @@ The audit found the following correct; they are not scheduled for rework:
 |---|---|---|
 | 0 | Freeze the VM-era snapshot (`v1.0-vm-era`), publish this audit, archive recovered evidence | Done |
 | 1 | Make the repository build; capture full environment metadata on every run | Done |
-| 2 | **Anchor measurement**: run the unmodified, still-defective code on the new machine and archive it as the only legitimate control group for subsequent fixes | Done; see below |
-| 3 | Measurement infrastructure: TSC calibration, serialised RDTSC, pre-faulted latency recorder, in-process affinity | Not started |
-| 4 | Benchmark semantic fixes, one per pull request, each re-run against the phase-2 anchor | Not started |
-| 5 | Implementation correctness: memory pool reclamation | Not started |
-| 6 | Pipeline v2: separated service/queue/end-to-end latency, open-loop load generator, queue-depth sweep | Not started |
+| 2 | **Anchor measurement**: run the unmodified, still-defective code on the new machine and archive it as the only legitimate control group for subsequent fixes | Done; replaced by controls of 32 launches, see below |
+| 3 | Measurement infrastructure: TSC calibration, serialised RDTSC, pre-faulted latency recorder, in-process affinity | Done (#17, #18) except the pre-faulted recorder. Its page faults fall after the service-time reading and can only lengthen queue time; not measured |
+| 4 | Benchmark semantic fixes, one per pull request, each re-run against the phase-2 anchor | Done, grouped by program: the two-thread benchmarks (#18) and the single-threaded ones (#20), each with a validation recording kept at a tag |
+| 5 | Implementation correctness: memory pool reclamation | Done (#17). Two order book defects found on the way were also fixed (#19): a price level stayed in the map after its last live order filled if a cancel had left a gap in it, and `clear()` gave up the order index's reserved slots |
+| 6 | Pipeline v2: separated service/queue/end-to-end latency, open-loop load generator, queue-depth sweep | Partly done: queue time and service time are reported separately (#18). The open-loop generator and the depth sweep are not started |
 | 7 | Hardware PMU evidence, now available on bare metal | Not started |
-| 8 | Rewrite README §4 with historical and current results side by side, never overwriting | Not started |
+| 8 | Rewrite README §4 with historical and current results side by side, never overwriting | Done differently: README §4 reports only the current control. The historical numbers are kept at the tag `v1.0-vm-era` and audited here |
 
 Phase 2 is load-bearing. Because the original environment is gone, the only way to
 attribute a change to code rather than to hardware is to measure the unfixed code on
@@ -320,5 +371,7 @@ setting the completion flag without holding the queue mutex, and its engine obje
 is now aligned to a cache line, because the object's address modulo 64 chose between
 two performance levels at every launch. A further study traced the movement that
 remained to a one-time cost in the pipeline's first repetition, to C1 in the latency
-reports, and to the queue benchmarks' bookkeeping and memory placement. The current
-control and the conclusions of these studies are in [`evidence/README.md`](evidence/README.md).
+reports, and to the queue benchmarks' bookkeeping and memory placement. Once those
+were fixed, a new control of the fixed benchmarks was recorded; README section 4
+reports it. The control and the conclusions of these studies are in
+[`evidence/README.md`](evidence/README.md).

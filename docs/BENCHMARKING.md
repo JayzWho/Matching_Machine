@@ -16,9 +16,9 @@ All four are built from `benchmarks/` by the Release configuration.
 | `bench_matching_engine` | SPSC pipeline throughput at three sizes, a single-threaded baseline through `add_order_noalloc` and through `add_order`, and a latency report of queue time and service time | 2 | both measurement cores: the producer thread on the lower-numbered, the consumer on the higher |
 | `bench_baseline_mutex` | Mutex pipeline throughput at three sizes, and a latency report of queue time and service time | 2 | as `bench_matching_engine` |
 
-These programs still contain the defects described in `AUDIT.md`. A recording
-of them in that state is called a **control**: it exists so that a later fix
-can be compared with the unfixed code on the same machine.
+A recording of all four at one commit, 32 launches of each, is called a
+**control**. The current control was recorded after the fixes listed in
+`AUDIT.md`, and README section 4 reports it.
 
 `bench_baseline_mutex` declares its engine object `alignas(64)`. Without it,
 the address-space layout of each launch chose between two performance levels
@@ -73,7 +73,7 @@ scripts/report/bench_report.py docs/evidence/<cpu>/<study>
 ```
 
 `bench_record.py` runs four sessions of eight rounds with six repetitions by
-default, the first a warm-up, which takes about 95 minutes on the reference
+default, the first a warm-up, which takes about 105 minutes on the reference
 machine. Rounds alternate between the two conditions, and the condition that
 goes first alternates between sessions.
 
@@ -150,36 +150,27 @@ Because launches differ, a comparison between two versions of the code needs
 several launches of each, and compares their launch medians. The scatter of the
 repetitions inside one launch says nothing about the next launch.
 
-## Results not to compare yet
+## Results not to compare
 
-The [variance-sources study](evidence/README.md) found defects that move these
-results for reasons other than the code under test. Until a pull request fixes
-each, do not compare them between versions of the code:
+The defects listed in `AUDIT.md` are fixed, but some results still should not
+be compared in the way that first suggests itself:
 
-- **Both latency reports.** They measure how long an order waits in the queue,
-  not how long matching takes (`AUDIT.md`, C1).
-- **The producer-to-consumer benchmarks of `bench_spsc_ring_buffer`.** In
-  `BM_SPSC_ProducerConsumer` the consumer adds every item to a checksum on the
-  cache line of `N`, which the producer reads for every item. All three keep
-  their queue in memory that a launch draws once and leave their two threads to
-  the scheduler, and these two choices together set their level; the mutex
-  queue's state is also unaligned. Without the shared checksum, the int64 ring
-  has two levels, 8 to 9 and about 60 ns per item. They are two states of the
-  transfer: in the slower one the consumer has caught up with the producer and
-  waits for it before about one item in twelve, reading the cache line the
-  producer is still writing. The ring is in the slower state exactly when the
-  slice of the last-level cache that serves `tail_` is the slice of the
-  producer's CPU. The physical address of the queue sets the slice, so in each
-  assignment of the threads to the CPUs one fresh region in four is slow, and
-  no region is slow in both. The fix keeps both states as a result: it pins the
-  threads, measures both assignments of them to the CPUs on many fresh memory
-  regions per launch, and reports the level of each state and the share of slow
-  measurements. The Order ring and the mutex queue have no such levels; they are
-  reported by their median over the same measurements.
-
-The pipeline throughput is comparable through launch medians. The first
-repetition in a launch pays a one-time cost of the process, which is why the
-recorders mark the first repetition of every benchmark as a warm-up.
+- **The mutex pipeline's queue time, between launches or between versions.**
+  The mutex queue has no bound, so its queue time follows how far the producer
+  gets ahead of the consumer, and it moves with a CV of 26% between launches of
+  one binary. Its service time moves with a CV of 0.2%. Compare service time.
+- **Queue time against the throughput benchmarks.** Only the latency-report
+  runs read the TSC, and the fences around each reading slow their consumer by
+  about a quarter. The queue time they report is that of a slower consumer.
+- **One mean over both states of the int64 ring.** Its producer-to-consumer
+  instances run in one of two states, set by the memory region and the thread
+  placement. Compare the level of each state and the share of slow instances.
+- **The SPSC pipeline against the mutex pipeline as a measure of the queue
+  alone.** The mutex baseline also uses the v1 order book and allocates every
+  order on the heap, so their ratio compares two whole systems.
+- **Studies from different boots or machines.** A study covers one boot (see
+  below), so a comparison between versions of the code records both versions
+  in one study, with `bench_diagnose.py` (see Diagnostic runs).
 
 ## Known limits
 
@@ -190,8 +181,9 @@ recorders mark the first repetition of every benchmark as a warm-up.
   label. They use one placement: the producer on the lower-numbered core.
 - Latency is reported in ticks of the processor's timestamp counter (TSC).
   `capture_env.sh` measures the counter's frequency against `CLOCK_MONOTONIC`
-  before and after every session and records it in `env.json` under `tsc`;
-  the reports do not convert ticks to time yet. Queue time subtracts a reading
+  before and after every session and records it in `env.json` under `tsc`.
+  `bench_report.py` does not convert ticks to time; README section 4 converts
+  them with the calibrated frequency. Queue time subtracts a reading
   taken on the producer's core from one taken on the consumer's, which relies
   on the counters of the cores being synchronized. The kernel compares them as
   it brings each CPU up and stops using the TSC as its clock source if they
