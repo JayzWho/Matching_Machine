@@ -291,32 +291,45 @@ BENCHMARK(BM_CancelOrder);
 // ── 5. 混合流量（模拟真实场景） ───────────────────────────────────────────────
 // 使用 FeedSimulator 生成真实分布的订单序列（限价单 + 撤单混合）
 // 并批量送入 OrderBook，测量平均每笔订单的处理吞吐量。
+//
+// 设计说明：
+//   - 每次迭代在暂停计时内重置全部订单的状态、新建订单簿（上一次迭代的订单簿在这里析构），
+//     所以每次迭代从空订单簿开始处理同一串订单，做的事完全相同。
+//   - 计数器 trades_per_iteration 是每次迭代的成交笔数；各次迭代不相同时报错。
 static void BM_MixedWorkload(benchmark::State& state) {
     // 预生成订单（不计入 benchmark 时间）
     FeedSimulator sim("BTCUSD", 100'000'000, /*cancel_ratio=*/0.1, /*seed=*/42);
     auto orders = sim.generate_random(1000'000);
     for (auto& o : orders) o.timestamp_ns = 1;  // 生成的时间戳为 0，原因见 make_order
 
+    std::unique_ptr<OrderBook> book;
+    int64_t first_trades = -1;
+    bool same_every_iteration = true;
     for (auto _ : state) {
         state.PauseTiming();
-        OrderBook book("BTCUSD");
+        for (auto& o : orders) reset(o);
+        book = std::make_unique<OrderBook>("BTCUSD");
         state.ResumeTiming();
 
         int64_t total_trades = 0;
         for (auto& o : orders) {
             if (o.type == OrderType::CANCEL) {
-                book.cancel_order(o.order_id);
+                book->cancel_order(o.order_id);
             } else {
-                auto trades = book.add_order(&o);
+                auto trades = book->add_order(&o);
                 total_trades += static_cast<int64_t>(trades.size());
             }
         }
-        benchmark::DoNotOptimize(total_trades);
+
+        if (first_trades < 0) first_trades = total_trades;
+        same_every_iteration = same_every_iteration && total_trades == first_trades;
     }
 
+    state.counters["trades_per_iteration"] = static_cast<double>(first_trades);
+    if (!same_every_iteration) state.SkipWithError("iterations produced different numbers of trades");
     // 报告每秒处理的订单数
     state.SetItemsProcessed(
         static_cast<int64_t>(state.iterations()) *
         static_cast<int64_t>(orders.size()));
 }
-BENCHMARK(BM_MixedWorkload)->Iterations(50);
+BENCHMARK(BM_MixedWorkload)->Iterations(5);
