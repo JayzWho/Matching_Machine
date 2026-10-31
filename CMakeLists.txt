@@ -5,33 +5,26 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 生成 compile_commands.json，供 clangd 语言服务器使用
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# 编译选项：Release 模式下开启 O2 优化
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
-# Debug：ASan + UBSan
+# Debug: ASan plus an explicit list of UBSan checks.
 #
-# UBSan 的 null 与 function 两个子检查必须排除。GCC 15 与 abseil 的 SwissTable
-# 实现在这两个检查下不兼容：它们会破坏 hash_policy_traits::get_hash_slot_fn()
-# 中"函数指针 == nullptr"的常量表达式求值，使 absl::flat_hash_map 无法编译：
+# UBSan's null and function checks are left out. Under GCC 15 they break the constant
+# evaluation of a function-pointer comparison in Abseil's hash_policy_traits, and
+# absl::flat_hash_map no longer compiles:
 #
 #   error: '(TypeErasedApplyToSlotFn<...> == 0)' is not a constant expression
 #
-# 已验证这不是发行版打包问题：系统包 20260107 与上游 20260817.0 表现一致；
-# 也不是优化级别问题：-O0/-O1/-Og/-O2 不带 sanitizer 时均可编译。
-#
-# 采用显式列举而非 "-fsanitize=undefined -fno-sanitize=null,function"，
-# 因为 GCC 不支持从 undefined 这个检查组中撤销单个子检查（实测无效）。
-#
-# 覆盖面损失（可接受且有替代）：
-#   null     —— 空指针解引用仍由 ASan 捕获（零页不可映射）
-#   function —— 检查间接调用的类型不匹配；热路径自 d941a21 起已由
-#               std::function 改为模板静态多态，几乎不存在间接调用
+# The system package 20260107 and upstream 20260817.0 behave the same, and every
+# optimization level compiles without sanitizers. GCC cannot remove single checks from
+# -fsanitize=undefined, hence the list. ASan still catches null dereferences, and the
+# hot path has used templates instead of std::function since f2abe06, so the function
+# check would have little to cover.
 set(ME_UBSAN_CHECKS
     signed-integer-overflow bounds alignment shift return vla-bound
     float-divide-by-zero integer-divide-by-zero unreachable bool enum
@@ -40,44 +33,34 @@ list(JOIN ME_UBSAN_CHECKS "," ME_UBSAN_CHECKS_CSV)
 
 set(CMAKE_CXX_FLAGS_DEBUG   "-g -O0 -fsanitize=address,${ME_UBSAN_CHECKS_CSV}")
 
-# 构建类型名的大写形式，用于索引 CMAKE_CXX_FLAGS_<CONFIG>。
-# 必须在 CMAKE_BUILD_TYPE 默认值和各 CONFIG 的 flags 都确定之后求值。
+# Indexes CMAKE_CXX_FLAGS_<CONFIG>; evaluated once the build type and flags are set.
 string(TOUPPER "${CMAKE_BUILD_TYPE}" ME_BUILD_TYPE_UPPER)
 
-# ── 第三方依赖 ────────────────────────────────────────────────────────────────
+# ── Dependencies ─────────────────────────────────────────────────────────────
 include(FetchContent)
 
-# 第三方头文件以 SYSTEM include 方式引入，避免其 GNU 扩展（如 abseil 的
-# __int128）在本项目的 -Wpedantic 下产生大量与自身代码无关的警告。
-# FetchContent 的 SYSTEM 关键字需要 CMake 3.25+；更低版本降级为普通 include。
+# Third-party headers are SYSTEM includes so that their GNU extensions, such as Abseil's
+# __int128, do not warn under -Wpedantic. FetchContent takes SYSTEM from CMake 3.25.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.25)
   set(ME_FC_SYSTEM SYSTEM)
 else()
   set(ME_FC_SYSTEM "")
 endif()
 
-# Abseil（absl::flat_hash_map）
-#   优先使用系统安装（Debian/Ubuntu: sudo apt install libabsl-dev），
-#   未安装时回退到源码构建。两条路径锁定同一版本，行为一致。
-#   注意：源码构建首次配置耗时数分钟，且会编译整个 abseil。
-#   源码构建锁定的版本（abseil 的 CMake 包版本号格式不稳定，
-#   故不对系统安装做精确版本匹配，仅在源码路径上锁定）
+# Abseil: the system package (libabsl-dev) when present, otherwise this version built
+# from source, which takes several minutes on the first configure. Only the source
+# path pins a version, since Abseil's package version format is not stable.
 set(ME_ABSL_FALLBACK_VERSION 20260107.0)
 
-# sanitizer 构建必须从源码编译 abseil，不能用系统预编译库。
-#
-# 原因是 ABI 不匹配：abseil 的 SwissTable 会根据 ABSL_HAVE_ADDRESS_SANITIZER
-# 改变 small-object-optimization 的布局。系统 libabsl.so 未开 sanitizer，
-# 而由头文件在本项目中实例化的模板代码开了，两者对 SOO capacity 的认知不一致，
-# 运行时在 raw_hash_set.cc 触发 abseil 内部断言：
+# Sanitizer builds compile Abseil from source. Its SwissTable changes its small-object
+# layout under ABSL_HAVE_ADDRESS_SANITIZER, so templates instantiated here with ASan
+# disagree with an uninstrumented system libabsl.so, and the first reserve() in
+# OrderBook aborts in raw_hash_set.cc:
 #
 #   Assertion `(kMode != ResizeNonSooMode::kGuaranteedEmpty ||
 #               old_capacity == policy.soo_capacity())' failed.
 #
-# 该断言在 OrderBook 构造（order_index_.reserve）时即触发，Debug 下全部
-# OrderBook/MatchingEngine 测试无法运行。Release（无 sanitizer）不受影响。
-#
-# 这符合 abseil 的官方要求：使用方必须与 abseil 本身用相同的编译选项构建。
+# Abseil requires its users to build with the same options as Abseil itself.
 set(ME_ABSL_FROM_SOURCE OFF)
 if(CMAKE_CXX_FLAGS_${ME_BUILD_TYPE_UPPER} MATCHES "-fsanitize=")
   set(ME_ABSL_FROM_SOURCE ON)
@@ -130,8 +113,7 @@ set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(googletest benchmark)
 
-# ── 核心静态库 ────────────────────────────────────────────────────────────────
-# 所有可复用逻辑编译为静态库，main / tests / benchmarks 统一链接
+# ── Engine library, linked by the demo, the tests and the benchmarks ─────────
 add_library(matching_engine_lib STATIC
   src/order_book.cpp
   src/matching_engine.cpp
@@ -146,7 +128,7 @@ target_compile_options(matching_engine_lib PRIVATE
   -Wall -Wextra -Wpedantic
 )
 
-# ── 线程库（多线程流水线依赖） ────────────────────────────────────────────────
+# ── Threads ──────────────────────────────────────────────────────────────────
 find_package(Threads REQUIRED)
 
 target_link_libraries(matching_engine_lib PUBLIC
@@ -154,11 +136,11 @@ target_link_libraries(matching_engine_lib PUBLIC
   Threads::Threads
 )
 
-# ── 主程序可执行文件 ──────────────────────────────────────────────────────────
+# ── Demo ─────────────────────────────────────────────────────────────────────
 add_executable(matching_engine src/main.cpp)
 target_link_libraries(matching_engine PRIVATE matching_engine_lib)
 
-# ── 测试套件 ──────────────────────────────────────────────────────────────────
+# ── Tests ────────────────────────────────────────────────────────────────────
 enable_testing()
 
 add_executable(test_order_book       tests/test_order_book.cpp)
@@ -180,8 +162,8 @@ foreach(test_target
   add_test(NAME ${test_target} COMMAND ${test_target})
 endforeach()
 
-# 测量脚本的测试：不依赖构建产物，也不进入测量模式。登记在此，
-# ctest 一次跑完全部测试；ctest -L scripts 只跑这一组，-LE scripts 跳过它们。
+# The measurement scripts' tests need no build and no measurement mode. `ctest -L scripts`
+# runs only them, `ctest -LE scripts` everything else.
 foreach(script_test
     scripts/env/test_bench_env.sh
     scripts/env/test_install_bench_env.sh)
@@ -200,7 +182,7 @@ if(Python3_FOUND)
       scripts/report/test_diagnose_report.py
       scripts/diagnostics/test_thread_affinity.py)
     get_filename_component(script_test_name ${script_test} NAME_WE)
-    # -B：不在源码树里写 __pycache__
+    # -B: no __pycache__ in the source tree
     add_test(NAME ${script_test_name}
              COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/${script_test}
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
@@ -210,7 +192,7 @@ else()
   message(STATUS "Python 3 not found: the Python script tests are not registered")
 endif()
 
-# ── Benchmark 套件 ────────────────────────────────────────────────────────────
+# ── Benchmarks ───────────────────────────────────────────────────────────────
 add_executable(bench_order_book       benchmarks/bench_order_book.cpp)
 add_executable(bench_spsc_ring_buffer benchmarks/bench_spsc_ring_buffer.cpp)
 add_executable(bench_matching_engine  benchmarks/bench_matching_engine.cpp)
@@ -227,9 +209,10 @@ foreach(bench_target
   )
 endforeach()
 
-# 单线程基准自带的检查：每次迭代是否真的成交、撤单是否找到订单、各次迭代的成交笔数是否相同。
-# 不通过的基准报错，Google Benchmark 输出 "ERROR OCCURRED"。这里每个基准短跑一遍，有报错即失败。
-# MixedWorkload 每次迭代重放 100 万笔订单，带 sanitizer 时要跑一分多钟，只在不带 sanitizer 的构建里跑。
+# The single-threaded benchmarks check that each iteration did its work and report an
+# error otherwise ("ERROR OCCURRED"); each runs briefly here and an error fails the test.
+# MixedWorkload replays a million orders per iteration and takes over a minute under
+# sanitizers, so it runs only in builds without them.
 set(bench_check_args --benchmark_min_time=0.01s)
 if(CMAKE_CXX_FLAGS_${ME_BUILD_TYPE_UPPER} MATCHES "-fsanitize=")
   list(APPEND bench_check_args --benchmark_filter=-MixedWorkload)
@@ -240,8 +223,8 @@ add_test(NAME bench_single_thread_checks
 set_tests_properties(bench_order_book_checks bench_single_thread_checks PROPERTIES
   FAIL_REGULAR_EXPRESSION "ERROR OCCURRED")
 
-# TSC 频率标定（对照 CLOCK_MONOTONIC），由 scripts/env/capture_env.sh 调用，
-# 结果写进每次录制的环境记录。测试只检查它能运行并打印出频率。
+# Calibrates the TSC against CLOCK_MONOTONIC for scripts/env/capture_env.sh, which stores
+# the result with every recording. The test checks only that it runs and prints a frequency.
 add_executable(tsc_calibrate scripts/env/tsc_calibrate.cpp)
 add_test(NAME tsc_calibrate COMMAND tsc_calibrate)
 set_tests_properties(tsc_calibrate PROPERTIES

@@ -1,16 +1,6 @@
 /**
- * test_matching_engine.cpp
- *
- * MatchingEngine 多线程流水线集成测试。
- *
- * 覆盖场景：
- *   1. 单线程接口向后兼容（submit/add_symbol）
- *   2. 流水线启动与停止（start/stop 生命周期）
- *   3. 消费者订单计数与内存池无泄漏
- *   4. TradeRingBuffer 成交记录写入正确性
- *   5. 并发压力：大批量订单无崩溃、无挂起
- *   6. 线程钉核：钉在指定 CPU 上照常处理全部订单；CPU 不可用时 start() 抛出且引擎停下
- *   7. 内存池归还：每轮结束时内存池里只有仍挂在簿上的订单，撤单归还被撤的挂单
+ * MatchingEngine: the single-threaded interface, TradeRingBuffer, the add_order_noalloc
+ * path, and the pipeline's lifecycle, thread pinning and return of every order to the pool.
  */
 
 #include "matching_engine.h"
@@ -26,7 +16,7 @@
 
 using namespace me;
 
-// ─── 辅助工具 ────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 static Order make_order(uint64_t id, Side side, int64_t price, int64_t qty,
                         const char* symbol = "BTCUSD") {
@@ -40,7 +30,7 @@ static Order make_order(uint64_t id, Side side, int64_t price, int64_t qty,
     return o;
 }
 
-// ─── 1. 单线程接口向后兼容 ───────────────────────────────────────────────────
+// ─── Single-threaded interface ───────────────────────────────────────────────
 
 TEST(MatchingEngineTest, SingleThreadSubmit_NoMatch) {
     MatchingEngine engine;
@@ -49,7 +39,7 @@ TEST(MatchingEngineTest, SingleThreadSubmit_NoMatch) {
     Order o = make_order(1, Side::BUY, 99'000'000, 10);
     auto trades = engine.submit(&o);
 
-    EXPECT_TRUE(trades.empty());  // 无对手单，不成交
+    EXPECT_TRUE(trades.empty());
     EXPECT_EQ(engine.total_trades(), 0u);
 }
 
@@ -59,7 +49,7 @@ TEST(MatchingEngineTest, SingleThreadSubmit_FullMatch) {
 
     Order sell = make_order(1, Side::SELL, 100'000'000, 10);
     auto t1 = engine.submit(&sell);
-    EXPECT_TRUE(t1.empty());  // 先挂卖单，无对手
+    EXPECT_TRUE(t1.empty());
 
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
     auto t2 = engine.submit(&buy);
@@ -69,7 +59,7 @@ TEST(MatchingEngineTest, SingleThreadSubmit_FullMatch) {
     EXPECT_EQ(engine.total_trades(), 1u);
 }
 
-// ─── 2. TradeRingBuffer 单元测试 ─────────────────────────────────────────────
+// ─── TradeRingBuffer ─────────────────────────────────────────────────────────
 
 TEST(TradeRingBufferTest, PushAndDrain) {
     TradeRingBuffer<8> buf;
@@ -97,7 +87,7 @@ TEST(TradeRingBufferTest, PushAndDrain) {
 }
 
 TEST(TradeRingBufferTest, WrapAround) {
-    // 容量为 4，写入 6 个，验证环形覆盖
+    // Six writes into a capacity of four overwrite the two oldest.
     TradeRingBuffer<4> buf;
     for (uint64_t i = 1; i <= 6; ++i) {
         Trade t{};
@@ -105,10 +95,9 @@ TEST(TradeRingBufferTest, WrapAround) {
         buf.push_trade(t);
     }
 
-    EXPECT_EQ(buf.size(), 4u);  // 最多保留 4 个（容量）
+    EXPECT_EQ(buf.size(), 4u);
     EXPECT_EQ(buf.total_written(), 6u);
 
-    // drain 应返回最新的 4 个（trade_id: 3,4,5,6）
     std::vector<uint64_t> ids;
     buf.drain([&](const Trade& t) { ids.push_back(t.trade_id); });
     ASSERT_EQ(ids.size(), 4u);
@@ -123,18 +112,16 @@ TEST(TradeRingBufferTest, DrainEmptyIsSafe) {
     EXPECT_EQ(count, 0u);
 }
 
-// ─── 3. 流水线启停与基本正确性 ───────────────────────────────────────────────
+// ─── Pipeline ────────────────────────────────────────────────────────────────
 
 TEST(MatchingEnginePipelineTest, StartStop_SmallBatch) {
     MatchingEngine engine;
-    // 运行 1000 笔订单，20% 撤单比例，记录延迟
     engine.start("BTCUSD", 100'000'000, /*order_count=*/1000, /*cancel_ratio=*/0.2, {}, /*record_latency=*/true);
     engine.stop();
 
-    // 消费者应处理了全部订单
     EXPECT_EQ(engine.consumed_count(), 1000u);
 
-    // 每笔订单的排队时间、服务时间各有一个采样
+    // One queue-time and one service-time sample per order.
     EXPECT_EQ(engine.queue_latency().count(), 1000u);
     EXPECT_EQ(engine.service_latency().count(), 1000u);
 }
@@ -158,23 +145,19 @@ TEST(MatchingEnginePipelineTest, StartStop_NotRunningAfterStop) {
 
 TEST(MatchingEnginePipelineTest, TradeBuffer_HasTrades) {
     MatchingEngine engine;
-    // 生成 2000 笔订单，0% 撤单：应产生大量成交
     engine.start("BTCUSD", 100'000'000, 2000, 0.0);
     engine.stop();
 
-    // TradeRingBuffer 有容量限制（kTradeBufCap = 4096），
-    // 2000 笔订单不会超出，应能拿到所有成交
+    // 2000 orders trade fewer times than kTradeBufCap, so no trade is overwritten.
     EXPECT_GT(engine.trade_buffer().total_written(), 0u);
 }
 
 TEST(MatchingEnginePipelineTest, LargeBatch_NoHang) {
-    // 10 万笔订单，验证不会挂起或崩溃
     MatchingEngine engine;
     engine.start("BTCUSD", 100'000'000, 100'000, 0.2);
 
-    // 设置超时等待：最多 30 秒
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    engine.stop();  // join 会阻塞直到完成
+    engine.stop();
 
     EXPECT_LT(std::chrono::steady_clock::now(), deadline)
         << "Pipeline took too long (> 30 seconds)";
@@ -182,8 +165,8 @@ TEST(MatchingEnginePipelineTest, LargeBatch_NoHang) {
     EXPECT_EQ(engine.consumed_count(), 100'000u);
 }
 
-// 在单线程上重放流水线生产者生成的同一串订单（FeedSimulator 默认种子相同），
-// 返回最后仍挂在订单簿上的订单数
+// Replays the producer's order stream (same default seed) on one thread and returns
+// the number of orders left resting.
 static size_t resting_after(size_t order_count, double cancel_ratio) {
     FeedSimulator sim("BTCUSD", 100'000'000, cancel_ratio);
     std::vector<Order> orders = sim.generate_random(order_count);
@@ -198,7 +181,8 @@ TEST(MatchingEnginePipelineTest, Pool_HoldsOnlyRestingOrdersAfterEachRun) {
     const size_t resting = resting_after(kOrders, 0.2);
     ASSERT_GT(resting, 0u);
 
-    // 成交和被撤的订单都已归还；每轮从满的内存池开始，所以每轮结束时都相同
+    // Filled and cancelled orders have come back, and every run starts from a full pool,
+    // so each run ends with the same count.
     MatchingEngine engine(kCapacity);
     for (int run = 0; run < 3; ++run) {
         engine.start("BTCUSD", 100'000'000, kOrders, 0.2);
@@ -207,7 +191,7 @@ TEST(MatchingEnginePipelineTest, Pool_HoldsOnlyRestingOrdersAfterEachRun) {
     }
 }
 
-// ─── 3b. 线程钉核 ─────────────────────────────────────────────────────────────
+// ─── Thread pinning ──────────────────────────────────────────────────────────
 
 TEST(MatchingEnginePipelineTest, PinnedThreads_ProcessAllOrders) {
     cpu_set_t set;
@@ -217,7 +201,7 @@ TEST(MatchingEnginePipelineTest, PinnedThreads_ProcessAllOrders) {
     for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
         if (CPU_ISSET(cpu, &set)) cpus.push_back(cpu);
 
-    // 能用两个 CPU 时分开钉，只有一个时两个线程钉在同一个上
+    // Two CPUs when available, otherwise both threads on one.
     MatchingEngine engine;
     engine.start("BTCUSD", 100'000'000, 1000, 0.2, ThreadCpus{cpus.front(), cpus.back()});
     engine.stop();
@@ -226,12 +210,11 @@ TEST(MatchingEnginePipelineTest, PinnedThreads_ProcessAllOrders) {
 }
 
 TEST(MatchingEnginePipelineTest, UnavailableCpu_ThrowsAndStops) {
-    const int outside = CPU_SETSIZE - 1;   // 不在本机上的 CPU 编号
+    const int outside = CPU_SETSIZE - 1;  // no such CPU on this machine
     MatchingEngine engine;
-    // 生产者起不来：已起来的消费者要退出，引擎回到停止状态，之后还能正常启动
+    // The producer cannot start: the consumer exits, the engine is stopped and can start again.
     EXPECT_THROW(engine.start("BTCUSD", 100'000'000, 1000, 0.2, ThreadCpus{outside, -1}), std::system_error);
     EXPECT_FALSE(engine.running());
-    // 消费者起不来
     EXPECT_THROW(engine.start("BTCUSD", 100'000'000, 1000, 0.2, ThreadCpus{-1, outside}), std::system_error);
     EXPECT_FALSE(engine.running());
 
@@ -240,7 +223,7 @@ TEST(MatchingEnginePipelineTest, UnavailableCpu_ThrowsAndStops) {
     EXPECT_EQ(engine.consumed_count(), 1000u);
 }
 
-// ─── 4. add_order_noalloc 单元测试（直接测 OrderBook 接口） ─────────────────
+// ─── OrderBook::add_order_noalloc ────────────────────────────────────────────
 
 TEST(OrderBookNoallocTest, NoMatch_NoTradeInBuffer) {
     TradeRingBuffer<64> buf;
@@ -249,7 +232,7 @@ TEST(OrderBookNoallocTest, NoMatch_NoTradeInBuffer) {
     Order buy = make_order(1, Side::BUY, 99'000'000, 10);
     book.add_order_noalloc(&buy, buf, [](Order*) {});
 
-    EXPECT_TRUE(buf.empty());   // 无对手单，无成交
+    EXPECT_TRUE(buf.empty());
     EXPECT_EQ(buy.filled_qty, 0);
 }
 
@@ -259,7 +242,7 @@ TEST(OrderBookNoallocTest, FullMatch_TradeInBuffer) {
 
     Order sell = make_order(1, Side::SELL, 100'000'000, 10);
     book.add_order_noalloc(&sell, buf, [](Order*) {});
-    EXPECT_TRUE(buf.empty());   // 卖单先挂，无对手
+    EXPECT_TRUE(buf.empty());
 
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
     book.add_order_noalloc(&buy, buf, [](Order*) {});
@@ -275,23 +258,21 @@ TEST(OrderBookNoallocTest, DeallocateCallback_CalledForRestingOrder) {
     TradeRingBuffer<64> buf;
     OrderBook book("BTCUSD");
 
-    // 记录被归还的 Order*
     std::vector<Order*> deallocated;
     auto deallocator = [&](Order* o) { deallocated.push_back(o); };
 
     Order sell = make_order(1, Side::SELL, 100'000'000, 10);
     book.add_order_noalloc(&sell, buf, deallocator);
-    EXPECT_TRUE(deallocated.empty());  // 卖单挂单，未被成交，不触发回调
+    EXPECT_TRUE(deallocated.empty());
 
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
     book.add_order_noalloc(&buy, buf, deallocator);
 
-    // deallocator 语义：归还所有"处理完毕"的 Order
-    // sell（挂单方）被完全成交 → 触发归还；buy（incoming FILLED）→ 同样触发归还
+    // Both orders are done: the filled resting sell first, from match_noalloc, then the
+    // filled incoming buy.
     ASSERT_EQ(deallocated.size(), 2u);
-    // 顺序：match_noalloc 先归还 resting(sell)，add_order_noalloc 末尾再归还 incoming(buy)
-    EXPECT_EQ(deallocated[0]->order_id, 1u);  // sell：挂单方，由 match_noalloc 归还
-    EXPECT_EQ(deallocated[1]->order_id, 2u);  // buy：incoming FILLED，由 add_order_noalloc 归还
+    EXPECT_EQ(deallocated[0]->order_id, 1u);
+    EXPECT_EQ(deallocated[1]->order_id, 2u);
 }
 
 TEST(OrderBookNoallocTest, PartialMatch_DeallocateNotCalledForPartialResting) {
@@ -301,23 +282,21 @@ TEST(OrderBookNoallocTest, PartialMatch_DeallocateNotCalledForPartialResting) {
     std::vector<Order*> deallocated;
     auto deallocator = [&](Order* o) { deallocated.push_back(o); };
 
-    // 挂一个大卖单（qty=20）
     Order sell = make_order(1, Side::SELL, 100'000'000, 20);
     book.add_order_noalloc(&sell, buf, deallocator);
 
-    // 买单只买 10：buy FILLED，sell 部分成交仍留在 PriceLevel
+    // The buy fills; the partly filled sell keeps resting and is not returned.
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
     book.add_order_noalloc(&buy, buf, deallocator);
 
-    EXPECT_EQ(buf.size(), 1u);          // 1 笔成交
-    // buy 完全成交应被归还；sell 仍有剩余不归还
+    EXPECT_EQ(buf.size(), 1u);
     ASSERT_EQ(deallocated.size(), 1u);
     EXPECT_EQ(deallocated[0]->order_id, 2u);  // buy：incoming FILLED
     EXPECT_EQ(sell.filled_qty, 10);
     EXPECT_EQ(sell.status, OrderStatus::PARTIAL);
 }
 
-// 撤单请求：order_id 是要撤的订单
+// A cancel request carries the ID of the order to cancel.
 static Order make_cancel(uint64_t target) {
     Order o = make_order(target, Side::BUY, 0, 0);
     o.type = OrderType::CANCEL;
@@ -337,7 +316,7 @@ TEST(OrderBookNoallocTest, Cancel_ReturnsCancelledOrderAndRequest) {
     Order cancel = make_cancel(1);
     book.add_order_noalloc(&cancel, buf, deallocator);
 
-    // 被撤的挂单先归还，撤单请求随后
+    // The cancelled order comes back first, then the request.
     ASSERT_EQ(deallocated.size(), 2u);
     EXPECT_EQ(deallocated[0], &resting);
     EXPECT_EQ(deallocated[1], &cancel);
@@ -354,7 +333,7 @@ TEST(OrderBookNoallocTest, Cancel_ReturnsPartiallyFilledOrder) {
     Order sell = make_order(1, Side::SELL, 100'000'000, 20);
     book.add_order_noalloc(&sell, buf, deallocator);
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
-    book.add_order_noalloc(&buy, buf, deallocator);   // buy 完全成交并归还，sell 剩 10
+    book.add_order_noalloc(&buy, buf, deallocator);
     ASSERT_EQ(deallocated.size(), 1u);
 
     Order cancel = make_cancel(1);
@@ -371,7 +350,7 @@ TEST(OrderBookNoallocTest, Cancel_UnknownOrderReturnsOnlyRequest) {
     std::vector<Order*> deallocated;
     auto deallocator = [&](Order* o) { deallocated.push_back(o); };
 
-    // 要撤的订单已成交：不在簿上，只归还撤单请求
+    // The target has already filled, so only the request comes back.
     Order sell = make_order(1, Side::SELL, 100'000'000, 10);
     Order buy = make_order(2, Side::BUY, 100'000'000, 10);
     book.add_order_noalloc(&sell, buf, deallocator);
@@ -392,8 +371,8 @@ TEST(OrderBookNoallocTest, FillRemovesLevelLeftWithOnlyCancelledOrders) {
     OrderBook book("BTCUSD");
     auto noop = [](Order*) {};
 
-    // 买档 100 里排着 first 和一个已撤的订单；卖单吃掉 first 后这一档只剩空洞，
-    // 应被删除，最优买价跳到下一档
+    // Level 100 holds `first` and a cancelled order. Once the sell takes `first`, only a
+    // hole is left, so the level must go and the best bid move to the next level.
     Order first     = make_order(1, Side::BUY, 100'000'000, 10);
     Order cancelled = make_order(2, Side::BUY, 100'000'000, 10);
     Order next      = make_order(3, Side::BUY,  99'000'000, 10);

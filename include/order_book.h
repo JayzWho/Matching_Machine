@@ -15,27 +15,17 @@
 
 namespace me {
 
-/// TradeRingBuffer 容量常量（供 OrderBook 接口模板参数使用）
 inline constexpr size_t kTradeBufCap = 4096;
 
 /**
- * @brief 订单簿（Order Book）— 单线程无锁版本（v3，进一步优化）
+ * Price-time priority order book for one symbol.
  *
- * 本版本针对 SPSC 架构下 Consumer 线程独占访问的场景，已移除 mutex。
- * OrderBook 不保证线程安全，调用方需确保单线程访问（由 SPSC 保证）。
+ * Not thread-safe: in the pipeline only the consumer thread touches it. Each side is a
+ * `std::map` from price to a FIFO `PriceLevel`, ordered so that `begin()` is the best
+ * price. `order_index_` maps the ID of every resting order to the order, for cancels.
  *
- * 数据结构选择：
- *   bid_levels_: std::map<int64_t, PriceLevel, std::greater<>>
- *     - map 保证价格从高到低有序（买方最优价在最前）
- *     - PriceLevel（vector + head 游标）保证同价格内按时间先后排列（FIFO）
- *   ask_levels_: std::map<int64_t, PriceLevel>
- *     - 价格从低到高有序（卖方最优价在最前）
- *   order_index_: absl::flat_hash_map<order_id, Order*>
- *     - open-addressing（Swiss Table）替代 std::unordered_map 链地址法
- *     - 桶连续排列，零额外堆分配，cache 局部性显著优于 std::unordered_map
- *     - reserve(65536) 避免 rehash；flat_hash_map 默认 load_factor ≤ 0.875
- *
- * 优化前快照（deque 版本）见 tag archive/pre-cleanup-2026-10：docs/snapshots/order_book_v1_deque.{h,cpp}
+ * Preconditions: live order IDs are unique and quantities are positive. The book does
+ * not check them. The caller owns the `Order` objects.
  */
 class OrderBook {
 public:
@@ -43,72 +33,48 @@ public:
     explicit OrderBook(std::string_view symbol);
     ~OrderBook();
 
-    // 禁止拷贝，允许移动
     OrderBook(const OrderBook&) = delete;
     OrderBook& operator=(const OrderBook&) = delete;
     OrderBook(OrderBook&&) = default;
     OrderBook& operator=(OrderBook&&) = default;
 
-    /**
-     * @brief 新增限价单，并尝试立即撮合
-     * @param order 订单指针，生命周期由调用方管理（后续由 MemoryPool 管理）
-     * @return 产生的成交列表
-     */
+    /// Matches a limit order and rests what is left. Accepts limit orders only; cancels
+    /// go through `cancel_order()`. Returns the trades, which costs one allocation per call.
     std::vector<Trade> add_order(Order* order);
 
     /**
-     * @brief 无堆分配版 add_order（供 MatchingEngine 消费者线程使用）
-     *
-     * 与 add_order 逻辑完全相同，区别在于：
-     *   - 成交结果直接写入外部 TradeRingBuffer，不构造 std::vector<Trade>
-     *   - 当挂单方订单被完全成交或被撤单时，调用 deallocator(Order*) 通知外部归还内存池
-     *
-     * 热路径全程无堆分配，Deallocator 在编译期内联，无间接调用开销。
-     *
-     * @tparam Cap         TradeRingBuffer 的容量（允许测试使用小容量）
-     * @tparam Deallocator callable 类型，签名 void(Order*)，用于归还处理完毕的 Order
-     * @param order       新到达订单的指针
-     * @param trade_buf   成交结果写入的环形缓冲区（消费者线程独占）
-     * @param deallocator 归还回调（通常为 lambda，编译期静态绑定）
+     * The pipeline's entry point. Handles both limit orders and cancel requests, writes
+     * trades into `trade_buf` instead of returning a vector, and calls `deallocator(Order*)`
+     * for every order the book is done with: a filled order, a cancel request and the
+     * order it cancelled. Orders and trades are not allocated here, but opening a price
+     * level or growing a level's vector still allocates.
      */
     template<size_t Cap, typename Deallocator>
     void add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf,
                            const Deallocator& deallocator);
 
-    /**
-     * @brief 撤销订单
-     * @return true 撤单成功，false 订单不存在或已成交
-     */
+    /// Returns false when no resting order has this ID.
     bool cancel_order(uint64_t order_id);
 
-    /// 查询当前最优买价（bid）
     [[nodiscard]] int64_t best_bid() const noexcept;
 
-    /// 查询当前最优卖价（ask）
     [[nodiscard]] int64_t best_ask() const noexcept;
 
-    /// 当前订单总数（用于测试验证）
+    /// Number of resting orders.
     [[nodiscard]] size_t order_count() const noexcept;
 
-    /// 订单索引的槽位数（用于测试验证）
     [[nodiscard]] size_t index_capacity() const noexcept;
 
-    /**
-     * @brief 清空订单簿，订单索引保留已分配的槽位（用于 benchmark 内批量复用）
-     *
-     * 清除所有价格档位和订单索引，重置成交计数器。之后的插入与新建的订单簿一样不触发 rehash。
-     * 注意：调用方负责管理 Order 对象的生命周期，clear() 不会释放 Order 指针。
-     */
+    /// Empties the book but keeps the index's slots, so refilling it does not rehash.
+    /// Does not free the orders.
     void clear() noexcept;
 
 private:
-    /// 撤销订单，返回被撤的订单（不存在或已成交时返回 nullptr）；cancel_order 与撤单请求共用
+    /// Removes a resting order and returns it, or nullptr when there is none.
     Order* cancel_resting(uint64_t order_id);
 
-    /// 内部撮合逻辑（返回 vector 版本，供旧接口使用）
     std::vector<Trade> match(Order* incoming);
 
-    /// 无堆分配撮合逻辑（模板版本，成交直接写入 trade_buf，挂单方成交后调用 deallocator）
     template<size_t Cap, typename Deallocator>
     void match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf,
                        const Deallocator& deallocator);
@@ -116,21 +82,13 @@ private:
     std::string symbol_;
 
     /**
-     * PriceLevel：同一价格档位下的订单队列。
-     *
-     * 优化：用 std::vector<Order*> + head_ 游标代替 std::deque<Order*>。
-     *
-     * 理由：
-     *   - deque 的内存布局是"分段数组"，每次追踪指针需要额外的间接层，
-     *     在高频撮合时造成不必要的 cache miss。
-     *   - vector 所有元素连续存储，顺序遍历对 CPU 预取（prefetch）友好。
-     *   - pop_front 用游标 head_++ 代替 erase(begin())，O(1) 且无内存移动。
-     *   - 当 head_ 超过容量一半时执行一次 compact（erase dead前缀），
-     *     防止 vector 无限增长。
+     * FIFO queue of one price level: a contiguous vector with a head cursor instead of a
+     * deque. Popping advances the cursor; the dead prefix is erased once it is more than
+     * half the vector. Cancelled orders leave nullptr holes.
      */
     struct PriceLevel {
         std::vector<Order*> orders;
-        size_t head = 0;   ///< 有效元素起始索引（指向队列头部）
+        size_t head = 0;
 
         void push(Order* o) { orders.push_back(o); }
 
@@ -141,10 +99,9 @@ private:
         void pop_front() {
             if (head < orders.size()) {
                 ++head;
-                // 跳过撤单留下的空洞，使 front() 总是活订单：档位里只剩空洞时
-                // empty() 为真，撮合随即删除这一档，最优价不会停在空档位上
+                // Skip holes so that front() is a live order and a level holding only
+                // holes is empty(); matching then erases it.
                 while (head < orders.size() && orders[head] == nullptr) ++head;
-                // 超过一半是空洞时 compact，均摊 O(1)
                 if (head > 16 && head > orders.size() / 2) {
                     orders.erase(orders.begin(),
                                  orders.begin() + static_cast<ptrdiff_t>(head));
@@ -157,21 +114,14 @@ private:
         size_t size() const { return orders.size() - head; }
     };
 
-    // 买方：价格越高越优先（降序）
     std::map<int64_t, PriceLevel, std::greater<int64_t>> bid_levels_;
-    // 卖方：价格越低越优先（升序）
     std::map<int64_t, PriceLevel>                        ask_levels_;
 
-    // 订单索引：order_id → Order*，用于 O(1) 撤单
-    // absl::flat_hash_map：open-addressing (Swiss Table)，桶连续排列，
-    // 零额外堆分配，cache 局部性显著优于 std::unordered_map 的链地址法
-    // reserve(65536) 避免高频插入触发 rehash
+    // Resting orders by ID. A cancel finds the order here, then scans its price level.
     absl::flat_hash_map<uint64_t, Order*> order_index_;
 
     uint64_t           trade_id_counter_ = 0;
 };
-
-// ── 模板函数实现（必须在头文件内） ───────────────────────────────────────────
 
 template<size_t Cap, typename Deallocator>
 void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf,
@@ -183,7 +133,6 @@ void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf,
     }
 
     if (order->type == OrderType::CANCEL) {
-        // 被撤的挂单已从价格档位和索引中移除，与撤单请求一起归还
         if (Order* cancelled = cancel_resting(order->order_id)) deallocator(cancelled);
         deallocator(order);
         return;
@@ -200,10 +149,7 @@ void OrderBook::add_order_noalloc(Order* order, TradeRingBuffer<Cap>& trade_buf,
         }
     }
 
-    // deallocator 统一负责归还所有"处理完毕"的 Order：
-    //   - FILLED incoming  → 在此归还
-    //   - CANCEL incoming  → 上方 early-return 处已归还，被撤的挂单也在那里归还
-    //   - 挂单（PARTIAL/NEW）→ 留在 PriceLevel，由 match_noalloc 在其被后续成交时归还
+    // A resting order is returned by match_noalloc once a later order fills it.
     if (order->is_filled()) {
         deallocator(order);
     }
@@ -215,9 +161,8 @@ void OrderBook::match_noalloc(Order* incoming, TradeRingBuffer<Cap>& trade_buf,
     if (incoming->side == Side::BUY) {
         while (!incoming->is_filled() && !ask_levels_.empty()) {
             auto& [ask_price, ask_level] = *ask_levels_.begin();
-            if (incoming->price < ask_price) break;     //若已无法撮合，跳出循环。
+            if (incoming->price < ask_price) break;
 
-            // 清理空洞
             while (!ask_level.empty() && ask_level.front() == nullptr)
                 ask_level.pop_front();
             if (ask_level.empty()) { ask_levels_.erase(ask_levels_.begin()); continue; }

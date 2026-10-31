@@ -1,9 +1,10 @@
 /**
- * order_book_v1.h
- *
- * 优化前的订单簿（v1），只供基准对比用：
- *   - bench_baseline_mutex 的 mutex 流水线用它撮合；
- *   - bench_order_book 的单线程基准把它和当前订单簿（me::OrderBook）放进同一段基准代码，各跑一遍。
+ * The order book from before the optimizations, kept unchanged as a baseline: the mutex
+ * pipeline matches with it, and bench_order_book runs it through the same benchmark code
+ * as me::OrderBook. It keeps the original snapshot's logic (docs/snapshots/ at the tag
+ * archive/pre-cleanup-2026-10): a std::deque per price level, an std::unordered_map index
+ * without reserve, cancels by deque::erase, a std::vector<Trade> per call without
+ * reserve, and a std::mutex in every public call.
  */
 
 #pragma once
@@ -21,16 +22,6 @@
 #include <algorithm>
 #include <cstring>
 
-// ─── OrderBookV1：v1 deque 版本（me_v1 命名空间隔离） ─────────────────────────
-//
-// 逻辑与 docs/snapshots/order_book_v1_deque.{h,cpp}（见 tag archive/pre-cleanup-2026-10）完全相同，
-// 保留所有"未优化"特征：
-//   - std::deque<Order*> 作为 PriceLevel 队列（非 cache-friendly）
-//   - std::unordered_map 无 reserve（高频插入触发 rehash）
-//   - cancel_order 用 deque::erase（O(n) 移动）
-//   - match() 返回 std::vector<Trade>（每次堆分配）
-//   - add_order / cancel_order / best_bid / best_ask 均持 std::mutex
-
 namespace me_v1 {
 
 class OrderBookV1 {
@@ -43,14 +34,11 @@ public:
     OrderBookV1(const OrderBookV1&) = delete;
     OrderBookV1& operator=(const OrderBookV1&) = delete;
 
-    // ── 核心接口 ──────────────────────────────────────────────────────────────
-
     std::vector<me::Trade> add_order(me::Order* order) {
         if (!order) return {};
 
         std::lock_guard<std::mutex> lock(mtx_);
 
-        // 兜底时间戳（若生产者已写入 RDTSC，则此处跳过）
         if (order->timestamp_ns == 0) {
             order->timestamp_ns = me::LatencyRecorder::now();
         }
@@ -83,7 +71,6 @@ public:
 
         order->status = me::OrderStatus::CANCELLED;
 
-        // 【原始版本】线性扫描 deque，用 erase 直接删除（O(n)）
         auto remove_from_level = [&](auto& levels) {
             auto level_it = levels.find(order->price);
             if (level_it == levels.end()) return;
@@ -122,7 +109,6 @@ public:
         return order_index_.size();
     }
 
-    /// 清空订单簿（benchmark 迭代间复用）
     void clear() noexcept {
         std::lock_guard<std::mutex> lock(mtx_);
         bid_levels_.clear();
@@ -132,10 +118,8 @@ public:
     }
 
 private:
-    // ── 核心撮合逻辑（价格-时间优先）────────────────────────────────────────
-    // 【原始版本】trades 无预分配 reserve，首次 emplace_back 必然触发堆分配
     std::vector<me::Trade> match(me::Order* incoming) {
-        std::vector<me::Trade> trades;  // 无 reserve
+        std::vector<me::Trade> trades;
 
         if (incoming->side == me::Side::BUY) {
             while (!incoming->is_filled() && !ask_levels_.empty()) {
@@ -224,11 +208,9 @@ private:
     std::string symbol_;
     mutable std::mutex mtx_;
 
-    // 【原始版本】std::deque<Order*>（非 cache-friendly 分段数组布局）
     std::map<int64_t, std::deque<me::Order*>, std::greater<int64_t>> bid_levels_;
     std::map<int64_t, std::deque<me::Order*>>                        ask_levels_;
 
-    // 【原始版本】无 reserve，高频插入触发 rehash
     std::unordered_map<uint64_t, me::Order*> order_index_;
 
     uint64_t trade_id_counter_ = 0;

@@ -37,7 +37,7 @@ std::vector<Order> FeedSimulator::load_csv(const std::string& filepath) {
     std::vector<Order> orders;
     std::string line;
 
-    // 跳过表头
+    // header
     std::getline(file, line);
 
     while (std::getline(file, line)) {
@@ -46,7 +46,6 @@ std::vector<Order> FeedSimulator::load_csv(const std::string& filepath) {
         std::string token;
 
         Order o{};
-        // 格式：order_id,side,price,qty,type
         std::getline(ss, token, ','); o.order_id  = std::stoull(token);
         std::getline(ss, token, ','); o.side      = (token == "0") ? Side::BUY : Side::SELL;
         std::getline(ss, token, ','); o.price     = std::stoll(token);
@@ -67,19 +66,19 @@ void FeedSimulator::generate_into(Order* slot) {
 Order FeedSimulator::make_random_order(bool is_cancel) {
     Order o{};
     o.order_id     = next_order_id_++;
-    o.timestamp_ns = 0;  // 由调用方（producer_loop）用 RDTSC 覆盖
+    o.timestamp_ns = 0;  // the producer stamps it
     o.side         = side_dist_(rng_) ? Side::BUY : Side::SELL;
     o.quantity     = qty_dist_(rng_);
     std::strncpy(o.symbol, symbol_.c_str(), 7);
 
     if (is_cancel) {
         o.type  = OrderType::CANCEL;
-        // 撤销一个已存在的订单（随机选择一个更早的 ID）
+        // Any earlier ID; it may no longer rest.
         std::uniform_int_distribution<uint64_t> id_dist(1, next_order_id_ - 2);
         o.order_id = id_dist(rng_);
     } else {
         o.type  = OrderType::LIMIT;
-        // 价格 = 基准价 + 随机偏移，取整到 100（模拟最小变动单位）
+        // Round the offset to a tick of 100.
         int64_t offset = static_cast<int64_t>(price_dist_(rng_));
         o.price = base_price_ + (offset / 100) * 100;
         if (o.price <= 0) o.price = base_price_;

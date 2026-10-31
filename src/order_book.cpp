@@ -6,8 +6,7 @@ namespace me {
 OrderBook::OrderBook(std::string_view symbol)
     : symbol_(symbol)
 {
-    // 预分配 order_index_ 容量，避免高频插入时触发 rehash
-    // rehash 是 O(n) 且会导致所有桶重分配，在热路径上开销不可控
+    // Reserve so that inserts do not rehash on the hot path.
     order_index_.reserve(65536);
 }
 
@@ -16,18 +15,14 @@ OrderBook::~OrderBook() = default;
 std::vector<Trade> OrderBook::add_order(Order* order) {
     if (!order) return {};
 
-    // 为订单打上入队时间戳（如果调用方没有设置）
     if (order->timestamp_ns == 0) {
         order->timestamp_ns = LatencyRecorder::now();
     }
 
-    // 注册到订单索引
     order_index_[order->order_id] = order;
 
-    // 尝试立即撮合
     auto trades = match(order);
 
-    // 如果仍有剩余数量，挂入对应价格档位
     if (!order->is_filled() && order->type == OrderType::LIMIT) {
         if (order->side == Side::BUY) {
             bid_levels_[order->price].push(order);
@@ -55,7 +50,7 @@ Order* OrderBook::cancel_resting(uint64_t order_id) {
 
     order->status = OrderStatus::CANCELLED;
 
-    // 从对应价格档位中移除（线性扫描，撤单是低频操作，可接受）
+    // Linear scan of the order's price level.
     auto remove_from_level = [&](auto& levels) {
         auto level_it = levels.find(order->price);
         if (level_it == levels.end()) return;
@@ -63,13 +58,12 @@ Order* OrderBook::cancel_resting(uint64_t order_id) {
         auto& vec = level.orders;
         for (size_t i = level.head; i < vec.size(); ++i) {
             if (vec[i] && vec[i]->order_id == order_id) {
-                vec[i] = nullptr;  // 标记为空洞（惰性删除）
+                vec[i] = nullptr;  // a hole; matching skips it
                 break;
             }
         }
-        // O(1)* 检查：从 head 向后跳过空洞，若无有效订单则清除档位。
-        // 不能用 level.empty()（它只判断游标，不感知 nullptr 空洞）。
-        // 此处最多扫描到第一个非 null 元素，均摊代价极低（撤单是低频操作）。
+        // Advance past leading holes and erase the level if nothing live remains; empty()
+        // looks only at the cursor.
         while (level.head < vec.size() && vec[level.head] == nullptr)
             ++level.head;
         if (level.head >= vec.size()) levels.erase(level_it);
@@ -106,26 +100,22 @@ size_t OrderBook::index_capacity() const noexcept {
 void OrderBook::clear() noexcept {
     bid_levels_.clear();
     ask_levels_.clear();
-    // 不用 order_index_.clear()：absl 的 clear() 在容量达到 128 时释放整张表，
-    // 之后的插入从 1 个槽位重新长大。整段 erase 清空元素但保留已分配的槽位。
+    // Not order_index_.clear(): from 128 slots up, absl's clear() frees the table and
+    // later inserts grow it again from one slot. Erasing the whole range keeps the slots.
     order_index_.erase(order_index_.begin(), order_index_.end());
     trade_id_counter_ = 0;
 }
 
-// ── 核心撮合逻辑（价格-时间优先） ─────────────────────────────────────────────
 std::vector<Trade> OrderBook::match(Order* incoming) {
     std::vector<Trade> trades;
-    trades.reserve(4);  // 预分配：覆盖 95%+ 场景，消除成交时的堆分配
+    trades.reserve(4);  // one allocation per call, even when nothing trades
 
     if (incoming->side == Side::BUY) {
-        // 买单：与卖方最优价（ask_levels_ 升序，begin() 是最低卖价）撮合
         while (!incoming->is_filled() && !ask_levels_.empty()) {
             auto& [ask_price, ask_level] = *ask_levels_.begin();
 
-            // 买价 < 最优卖价：无法成交，退出
             if (incoming->price < ask_price) break;
 
-            // 跳过空洞（惰性删除留下的 nullptr）
             while (!ask_level.empty() && ask_level.front() == nullptr) {
                 ask_level.pop_front();
             }
@@ -178,14 +168,11 @@ std::vector<Trade> OrderBook::match(Order* incoming) {
         }
 
     } else { // SELL
-        // 卖单：与买方最优价（bid_levels_ 降序，begin() 是最高买价）撮合
         while (!incoming->is_filled() && !bid_levels_.empty()) {
             auto& [bid_price, bid_level] = *bid_levels_.begin();
 
-            // 卖价 > 最优买价：无法成交，退出
             if (incoming->price > bid_price) break;
 
-            // 跳过空洞
             while (!bid_level.empty() && bid_level.front() == nullptr) {
                 bid_level.pop_front();
             }

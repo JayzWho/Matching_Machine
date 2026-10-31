@@ -4,16 +4,13 @@
 
 namespace me {
 
-// ── 析构函数：确保线程被 join ─────────────────────────────────────────────────
-
 MatchingEngine::~MatchingEngine() {
-    // 如果流水线还在运行，强制停止
     if (running_.load(std::memory_order_acquire)) {
         stop();
     }
 }
 
-// ── 单线程接口（向后兼容） ───────────────────────────────────────────────────
+// ── Single-threaded mode ─────────────────────────────────────────────────────
 
 void MatchingEngine::add_symbol(std::string_view symbol, int64_t /*base_price*/) {
     std::string key(symbol);
@@ -40,7 +37,7 @@ OrderBook* MatchingEngine::get_order_book(std::string_view symbol) {
     return (it != books_.end()) ? it->second.get() : nullptr;
 }
 
-// ── 多线程流水线：start / stop ──────────────────────────────────────────────
+// ── Pipeline: start / stop ───────────────────────────────────────────────────
 
 void MatchingEngine::start(std::string_view symbol,
                            int64_t         base_price,
@@ -52,20 +49,18 @@ void MatchingEngine::start(std::string_view symbol,
         throw std::runtime_error("MatchingEngine: already running");
     }
 
-    // 重置状态
-    // 内存池补满：上一轮结束时仍挂在簿上的订单随消费者的订单簿一起销毁，槽位不会再归还。
-    // 不重置的话每轮少一批槽位（10 万笔一轮约 1.4 万），多跑几轮后生产者拿不到槽位，永远空转。
-    // 此时两个线程都已 join，没有任何槽位还在使用。
+    // Refill the pool: orders still resting at the end of the last run died with the
+    // consumer's order book and never came back. Both threads are joined, so no slot is
+    // in use.
     order_pool_.reset();
     producer_done_.store(false, std::memory_order_relaxed);
     consumer_done_.store(false, std::memory_order_relaxed);
     consumed_count_.store(0, std::memory_order_relaxed);
     queue_latency_.reset();
     service_latency_.reset();
-    trade_buf_.drain([](const Trade&) {});  // 清空上轮残留的成交记录
+    trade_buf_.drain([](const Trade&) {});
     running_.store(true, std::memory_order_release);
 
-    // 启动两个线程（先消费者，再生产者，避免生产者推入时消费者未就绪）
     try {
         consumer_thread_ = PinnedThread(cpus.consumer, [this, sym = std::string(symbol), record_latency] {
             consumer_loop(sym, record_latency);
@@ -76,7 +71,8 @@ void MatchingEngine::start(std::string_view symbol,
             producer_loop(sym, base_price, order_count, cancel_ratio, record_latency);
         });
     } catch (...) {
-        // 线程没起来（例如 CPU 编号不可用）：让已起来的消费者排空后退出，再把错误交给调用方
+        // A thread failed to start, e.g. on an unavailable CPU: let the consumer drain and
+        // exit, then rethrow.
         producer_done_.store(true, std::memory_order_release);
         if (consumer_thread_.joinable()) consumer_thread_.join();
         running_.store(false, std::memory_order_release);
@@ -85,18 +81,16 @@ void MatchingEngine::start(std::string_view symbol,
 }
 
 void MatchingEngine::stop() {
-    // 等待生产者线程完成
     if (producer_thread_.joinable()) {
         producer_thread_.join();
     }
-    // 等待消费者线程完成（它会在 producer_done_ 且队列空时自行退出）
     if (consumer_thread_.joinable()) {
         consumer_thread_.join();
     }
     running_.store(false, std::memory_order_release);
 }
 
-// ── 生产者线程主循环 ─────────────────────────────────────────────────────────
+// ── Producer thread ──────────────────────────────────────────────────────────
 
 void MatchingEngine::producer_loop(std::string_view symbol,
                                    int64_t         base_price,
@@ -108,7 +102,7 @@ void MatchingEngine::producer_loop(std::string_view symbol,
     size_t pushed = 0;
 
     while (pushed < order_count) {
-        // ① 自旋等待：从内存池拿到空闲槽位（期间持续回收归还队列防止死锁）
+        // Spin for a free slot, reclaiming returned orders meanwhile.
         Order* slot = nullptr;
         while (true) {
             Order* ret = nullptr;
@@ -119,13 +113,11 @@ void MatchingEngine::producer_loop(std::string_view symbol,
             if (slot != nullptr) break;
         }
 
-        // ② 直接在内存池槽位上生成订单字段，零拷贝
         sim.generate_into(slot);
-        // 生产者写入 timestamp_ns（排队时间的起点）。不记录延迟时照旧写一个不带栅栏的读数：
-        // timestamp_ns 为 0 的订单，订单簿会在消费者线程上自己补读一次 TSC
+        // Start of queue time. Without latency recording an unfenced read still stamps the
+        // order, so the book does not read the TSC again on the consumer thread.
         slot->timestamp_ns = record_latency ? LatencyRecorder::now_serialized() : LatencyRecorder::now();
 
-        // ③ 自旋直到 order_queue_ 有空位
         while (!order_queue_.try_push(slot)) {
             Order* ret = nullptr;
             while (return_queue_.try_pop(ret)) {
@@ -136,13 +128,11 @@ void MatchingEngine::producer_loop(std::string_view symbol,
         ++pushed;
     }
 
-    // ── 阶段二：生产任务结束，通知消费者，进入纯回收模式 ──────────────────────
     producer_done_.store(true, std::memory_order_release);
 
-    // 持续 drain return_queue_，直到消费者完成并确认归还队列已清空
-    // 这样可以保证消费者的 deallocate_cb_ 永远不会在 return_queue_ 满时死等
+    // Keep draining return_queue_ until the consumer has exited, so that its pushes
+    // never spin on a full return queue.
     while (true) {
-        // drain return_queue_
         {
             Order* ret = nullptr;
             while (return_queue_.try_pop(ret)) {
@@ -151,7 +141,7 @@ void MatchingEngine::producer_loop(std::string_view symbol,
         }
 
         if (consumer_done_.load(std::memory_order_acquire)) {
-            // 消费者已退出，最后再彻底排空一次（消费者退出前最后几次 push 可能刚到）
+            // The consumer's last pushes may have landed after the drain above.
             Order* ret = nullptr;
             while (return_queue_.try_pop(ret)) {
                 order_pool_.deallocate(ret);
@@ -159,32 +149,26 @@ void MatchingEngine::producer_loop(std::string_view symbol,
             break;
         }
 
-        // 消费者还在处理，让出 CPU 避免空转（VM 2 核上非常重要）
         std::this_thread::yield();
     }
 }
 
-// ── 消费者线程主循环 ─────────────────────────────────────────────────────────
+// ── Consumer thread ──────────────────────────────────────────────────────────
 
 void MatchingEngine::consumer_loop(std::string_view symbol, bool record_latency) {
-    // 初始化消费者侧的 OrderBook
     OrderBook book(symbol);
 
-    // 归还 lambda：挂单方被完全成交后，将其推入 return_queue_
-    // 编译期静态绑定，无 std::function 间接调用开销
+    // Sends a finished order back to the producer. A lambda, so the book's template
+    // inlines it.
     auto deallocator = [this](Order* o) {
-        // 自旋等待归还队列有空位（极低概率满）
         while (!return_queue_.try_push(o)) {
-            // 如果这里阻塞，说明生产者回收过慢（扩大 kReturnQueueCap 可缓解）
         }
     };
 
-    // 处理一笔取出的订单；记录延迟时记下它的排队时间和服务时间
     auto consume = [&](Order* order) {
         if (record_latency) {
-            // 取出的时刻：排队时间的终点，服务时间的起点
             const uint64_t t_pop = LatencyRecorder::now_serialized();
-            // 撮合中订单可能归还给生产者、被重新生成，所以先读出生产者的时间戳
+            // Read the timestamp first: matching may return the order and the producer reuse it.
             const uint64_t t_push = order->timestamp_ns;
 
             book.add_order_noalloc(order, trade_buf_, deallocator);
@@ -196,9 +180,6 @@ void MatchingEngine::consumer_loop(std::string_view symbol, bool record_latency)
             book.add_order_noalloc(order, trade_buf_, deallocator);
         }
 
-        // 归还由 add_order_noalloc 内部的 deallocator 统一负责：
-        //   FILLED incoming、撤单请求和被撤的挂单均在那里归还；挂单留在 PriceLevel 中
-
         consumed_count_.fetch_add(1, std::memory_order_relaxed);
     };
 
@@ -209,19 +190,15 @@ void MatchingEngine::consumer_loop(std::string_view symbol, bool record_latency)
             consume(order);
 
         } else {
-            // 队列为空：检查生产者是否已完成
             if (producer_done_.load(std::memory_order_acquire)) {
-                // 再做一次 try_pop，避免 TOCTOU（生产者在设 done 前最后推入的订单）
+                // Pop once more: the producer may have pushed its last order just before
+                // setting producer_done_.
                 if (!order_queue_.try_pop(order)) {
-                    // 真正排空：先设 consumer_done_，再退出
-                    // 此处所有 add_order_noalloc 和 deallocator 均已完成
                     consumer_done_.store(true, std::memory_order_release);
                     break;
                 }
-                // 处理最后一条
                 consume(order);
             }
-            // 队列暂时为空但生产者未完成：继续自旋
         }
     }
 }
