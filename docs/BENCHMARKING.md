@@ -2,7 +2,8 @@
 
 How performance is measured in this repository: which programs are measured,
 which scripts run them, what is checked, and where results are kept. The
-results themselves are indexed in [`evidence/README.md`](evidence/README.md).
+current results are in [`RESULTS.md`](RESULTS.md), and the recordings are
+indexed in [`evidence/README.md`](evidence/README.md).
 The review of the earlier methodology is [`AUDIT.md`](AUDIT.md).
 
 ## The benchmark programs
@@ -18,7 +19,7 @@ All four are built from `benchmarks/` by the Release configuration.
 
 A recording of all four at one commit, 32 launches of each, is called a
 **control**. The current control was recorded after the fixes listed in
-`AUDIT.md`, and README section 4 reports it.
+`AUDIT.md`, and [`RESULTS.md`](RESULTS.md) reports it.
 
 `bench_baseline_mutex` declares its engine object `alignas(64)`. Without it,
 the address-space layout of each launch chose between two performance levels
@@ -182,7 +183,7 @@ be compared in the way that first suggests itself:
 - Latency is reported in ticks of the processor's timestamp counter (TSC).
   `capture_env.sh` measures the counter's frequency against `CLOCK_MONOTONIC`
   before and after every session and records it in `env.json` under `tsc`.
-  `bench_report.py` does not convert ticks to time; README section 4 converts
+  `bench_report.py` does not convert ticks to time; `RESULTS.md` converts
   them with the calibrated frequency. Queue time subtracts a reading
   taken on the producer's core from one taken on the consumer's, which relies
   on the counters of the cores being synchronized. The kernel compares them as

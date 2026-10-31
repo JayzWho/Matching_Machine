@@ -4,7 +4,7 @@ Recorded on 2026-10-30 on the 11th Gen Intel Core i5-1135G7 at commit `46cf493`.
 
 This is the current control: the four benchmark programs after the fixes
 listed in [`docs/AUDIT.md`](../../../AUDIT.md), on the code they measure at
-that commit. README section 4 reports it. It replaces the control of
+that commit. [`docs/RESULTS.md`](../../../RESULTS.md) reports it. It replaces the control of
 2026-10-15, which measured the unfixed benchmarks and is kept at the tag
 `archive/control-2026-10-15`.
 
@@ -28,7 +28,7 @@ and 0 thermal interrupts on the measurement cores. Launches on one core read
 median of 4.4 ms of CPU time per second on the launch's cores in `shared`
 (at most 21.9) and 1.2 ms in `cleared` (at most 5.6). For every benchmark the
 two conditions give medians within 2% of each other, so the table below and
-README section 4 pool all 32 launches. The mutex pipeline's queue time is the
+`docs/RESULTS.md` pool all 32 launches. The mutex pipeline's queue time is the
 exception, as finding 1 explains.
 
 ## Findings

@@ -18,8 +18,8 @@ the reasoning that identifies a bad benchmark is the same reasoning the project 
 meant to demonstrate in the first place.
 
 The audit is closed. The defects behind the published numbers have been fixed,
-the claims have been removed from `README.md`, and README section 4 now reports
-the fixed benchmarks on the current machine. Section 3 gives the outcome of each
+the claims have been removed from `README.md`, and [`RESULTS.md`](RESULTS.md) now
+reports the fixed benchmarks on the current machine. Section 3 gives the outcome of each
 claim and section 7 the remediation as it was carried out.
 
 Nothing in the historical record is lost. The README as audited is kept at the
@@ -59,19 +59,19 @@ claim no longer appears in the README.
 
 | Claim | Finding | Outcome |
 |---|---|---|
-| §4.1 `BM_AddOrder_NoMatch` 83.5 → 46.4 ns | **Questionable** — includes an unconditional `malloc`/`free` pair, and the two columns were produced with different benchmark code | Both order books now run the same benchmark code (#20). The pair remains in the current book's timed region; README §4.1 says so |
+| §4.1 `BM_AddOrder_NoMatch` 83.5 → 46.4 ns | **Questionable** — includes an unconditional `malloc`/`free` pair, and the two columns were produced with different benchmark code | Both order books now run the same benchmark code (#20). The pair remains in the current book's timed region; `RESULTS.md` says so |
 | §4.1 `BM_CancelOrder` 60,456 → 26,659 ns | **Withdrawn** — the timed region includes `~OrderBook()` (C5) | Fixed (#20) |
 | §4.1 `BM_AddOrder_SweepLevels/20` 3,093 → 2,297 ns | **Magnitude unreliable** — ~800 ns fixed pedestal from `PauseTiming` (C4) | Fixed (#20) |
 | §4.1 `BM_MixedWorkload` 3.87 → 6.19 M ops/s (+60%) | **Withdrawn** — cross-iteration state contamination (C2) | Fixed (#20) |
 | §4.1 "latency stddev / CV" | **Mislabelled** — run-to-run batch variability, not per-order jitter | Removed |
 | "hash map 32% → 12% (perf measured)" | **Evidence chain broken** — profiled the contaminated benchmark, with unreliable frame-pointer stacks | Removed |
-| §4.2 throughput 1.19 → 3.15 M/s (2.65×) | **Stands** — correctly derived from `real_time` | Re-measured on the current machine (README §4.2) |
+| §4.2 throughput 1.19 → 3.15 M/s (2.65×) | **Stands** — correctly derived from `real_time` | Re-measured on the current machine (`RESULTS.md`) |
 | §4.3 P50/P95/P99/P999 latency table | **Values real, interpretation wrong** — measures queueing delay, not service latency (C1) | Fixed (#18): queue time and service time are reported separately |
 | §4.3 "bare-metal SPSC P50 typically reaches 200–800 ns" | **Withdrawn** — not achievable under the current design (C1) | Removed |
 | §4.4 noalloc +30% (6.19 → 8.04 M ops/s) | **Withdrawn** — compares two different workloads (section 5) | Replaced by the two interfaces on one workload (#20) |
 | §5 "33 GTest cases … FeedSimulator" | **Incorrect** — 44 cases; no FeedSimulator test target exists | Corrected in phase 1 |
 | §5 "abseil-cpp pulled automatically" | **Incorrect** — `find_package(absl REQUIRED)` | Corrected in phase 1 |
-| §3 "cross-thread latency safe under SPSC acquire/release" | **Conceptually wrong** — acquire/release governs visibility, not TSC comparability across cores | Corrected in README §3 |
+| §3 "cross-thread latency safe under SPSC acquire/release" | **Conceptually wrong** — acquire/release governs visibility, not TSC comparability across cores | Corrected: `BENCHMARKING.md`, Known limits |
 
 Pull request numbers refer to
 [github.com/JayzWho/Matching_Machine/pulls](https://github.com/JayzWho/Matching_Machine/pulls?q=is%3Apr+is%3Amerged).
@@ -254,7 +254,7 @@ Separately, the audited revision did not build: `CMakeLists.txt` required
 `find_package(absl REQUIRED)`, and the audit machine had only the Abseil runtime
 package, not the development package. Phase 1 fixed this.
 
-**Outcome:** every number in README section 4 comes from a recorded study under
+**Outcome:** every number in `README.md` and `RESULTS.md` comes from a recorded study under
 `docs/evidence/` that keeps its raw output, environment record and binary
 checksums.
 
@@ -359,7 +359,7 @@ The audit found the following correct; they are not scheduled for rework:
 | 5 | Implementation correctness: memory pool reclamation | Done (#17). Two order book defects found on the way were also fixed (#19): a price level stayed in the map after its last live order filled if a cancel had left a gap in it, and `clear()` gave up the order index's reserved slots |
 | 6 | Pipeline v2: separated service/queue/end-to-end latency, open-loop load generator, queue-depth sweep | Partly done: queue time and service time are reported separately (#18). The open-loop generator and the depth sweep are not started |
 | 7 | Hardware PMU evidence, now available on bare metal | Not started |
-| 8 | Rewrite README §4 with historical and current results side by side, never overwriting | Done differently: README §4 reports only the current control. The historical numbers are kept at the tag `v1.0-vm-era` and audited here |
+| 8 | Rewrite README §4 with historical and current results side by side, never overwriting | Done differently: `README.md` and `RESULTS.md` report only the current control. The historical numbers are kept at the tag `v1.0-vm-era` and audited here |
 
 Phase 2 is load-bearing. Because the original environment is gone, the only way to
 attribute a change to code rather than to hardware is to measure the unfixed code on
@@ -374,6 +374,6 @@ is now aligned to a cache line, because the object's address modulo 64 chose bet
 two performance levels at every launch. A further study traced the movement that
 remained to a one-time cost in the pipeline's first repetition, to C1 in the latency
 reports, and to the queue benchmarks' bookkeeping and memory placement. Once those
-were fixed, a new control of the fixed benchmarks was recorded; README section 4
+were fixed, a new control of the fixed benchmarks was recorded; `RESULTS.md`
 reports it. The control and the conclusions of these studies are in
 [`evidence/README.md`](evidence/README.md).

@@ -7,7 +7,7 @@ are produced is described in [`../BENCHMARKING.md`](../BENCHMARKING.md).
 
 | Directory | Contents | Status |
 |---|---|---|
-| [`11th-Gen-Intel-Core-i5-1135G7/2026-10-30_15-55-52_46cf493_control/`](11th-Gen-Intel-Core-i5-1135G7/2026-10-30_15-55-52_46cf493_control/) | The fixed benchmarks on the current bare-metal machine: 32 launches of each binary in 4 sessions. README section 4 reports it | Current control |
+| [`11th-Gen-Intel-Core-i5-1135G7/2026-10-30_15-55-52_46cf493_control/`](11th-Gen-Intel-Core-i5-1135G7/2026-10-30_15-55-52_46cf493_control/) | The fixed benchmarks on the current bare-metal machine: 32 launches of each binary in 4 sessions. [`../RESULTS.md`](../RESULTS.md) reports it | Current control |
 
 The measurements published from a cloud VM before the audit are kept only at
 the tag `v1.0-vm-era`; [`../AUDIT.md`](../AUDIT.md) explains why they were
