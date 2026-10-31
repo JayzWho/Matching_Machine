@@ -1,6 +1,6 @@
 # Benchmark Methodology Audit
 
-**Status:** closed · **Opened:** 2026-09-20 · **Closed:** 2026-10-30 · **Audited revision:** `929e0db` (tag `v1.0-vm-era`)
+**Status:** closed · **Opened:** 2026-09-20 · **Closed:** 2026-10-30 · **Audited revision:** `a739434` (tag `v1.0-vm-era`)
 
 ---
 
@@ -25,9 +25,11 @@ claim and section 7 the remediation as it was carried out.
 Nothing in the historical record is lost. The README as audited is kept at the
 tag `v1.0-vm-era`. File and line references below are to the audited revision.
 Files cited here that have since left the tree are kept at tags:
-`learning_notes/`, `docs/optimization_log.md` and `scripts/run_perf.sh` at
+`docs/optimization_log.md` and `scripts/run_perf.sh` at
 `archive/pre-cleanup-2026-10`, and `docs/evidence/historical_vm/` at
-`archive/control-2026-10-15`.
+`archive/control-2026-10-15`. The study notes in `learning_notes/` were removed
+from the history on 2026-10-30, which also changed every commit ID; the IDs
+below are those of the rewritten history.
 
 ---
 
@@ -226,11 +228,11 @@ remains in the sources.
   `_(填入实测数据)_` and a `TODO`.
 - `docs/optimization_log.md` references git tags `v0.2-before-opt` and `v0.2-after-opt`.
   No tags existed in the repository prior to this audit.
-- Commit `dfcc2d0` modified `benchmarks/bench_order_book.cpp`, `include/order_book.h`
+- Commit `da18c99` modified `benchmarks/bench_order_book.cpp`, `include/order_book.h`
   and `src/order_book.cpp` together, so the "baseline" and "optimized" columns were
   produced by different benchmark code.
 
-One raw file was recoverable from git history (deleted in `1c35b37`) and is archived at
+One raw file was recoverable from git history (deleted in `76842d0`) and is archived at
 `docs/evidence/historical_vm/2026-04-08_bench_order_book_after_opt.json`, now at the
 tag `archive/control-2026-10-15`. It does not
 support the published table — it is an earlier and visibly broken generation of the
@@ -267,7 +269,7 @@ outcome.
   resting order to the pool, the consumer's `OrderBook` is function-local and discards
   every still-resting order on exit, and `MatchingEngine::start()` does not reset the
   pool. The producer's allocation loop has no exit condition, so exhaustion is a hang.
-  Commit `550a1a5` addressed the symptom by enlarging the pool; `LargeBatch_NoHang` is a
+  Commit `c2e7e95` addressed the symptom by enlarging the pool; `LargeBatch_NoHang` is a
   regression test for the symptom. Also makes the three throughput iterations
   non-comparable. *Fixed (#17): cancelled orders return to the pool, and `start()`
   refills it.*

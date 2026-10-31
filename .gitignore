@@ -8,6 +8,7 @@ CMakeCache.txt
 *.so
 *.o
 .cache/
+__pycache__/
 
 # Compiler and IDE files
 compile_commands.json
@@ -17,24 +18,7 @@ compile_commands.json
 *.swo
 *~
 
-# Personal and sensitive materials
-learning_notes/
-
-# Benchmark results (keep only selected baseline files)
-results/
-
-# CodeBuddy workspace data
-.codebuddy/
-
 # Temporary files
 .DS_Store
 Thumbs.db
 *.log
-
-# Temporary docs
-docs/private/
-docs/Interview_Prepare/
-data/
-
-# Claude
-CLAUDE.md

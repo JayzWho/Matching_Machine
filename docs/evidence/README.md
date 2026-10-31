@@ -104,11 +104,29 @@ one subdirectory with the files above per recording.
 - A study that has been replaced or answered leaves the tree only after a tag
   keeps it addressable. The tag is listed below with the reason.
 
+## Commit IDs
+
+On 2026-10-30 the history was rewritten to remove a directory of study notes,
+`learning_notes/`. Every other file of every commit is unchanged, but every
+commit ID changed. Study directories and `env.json` keep the IDs they were
+recorded with; this table gives the rewritten commit for each.
+
+| Recorded | Rewritten | Recorded | Rewritten |
+|---|---|---|---|
+| `46cf493` | `999c956` | `40a57bc` | `3d2513d` |
+| `51201a0` | `7123870` | `54a8cfe` | `2e9b44b` |
+| `575ea6e` | `ecaa7e8` | `6111ae4` | `6e61ced` |
+| `65a2223` | `231c3d2` | `8cf43f1` | `b3c8f17` |
+| `988720f` | `d0b3d84` | `a03ed6c` | `590c5ed` |
+| `bad47d0` | `6797336` | `bde5e69` | `c083229` |
+| `bf5f9fe` | `d6d42b4` | `e6a3630` | `682d4e7` |
+| `e8870ee` | `bbf2695` | `ed8444a` | `76287ab` |
+
 ## Archived
 
 | Tag | Contents | Why it left the tree |
 |---|---|---|
-| `archive/pre-cleanup-2026-10` | The two completed studies above with their reports; the tools only the launch-variance study used (object-placement build, GDB script, plot, hardware-counter summary, condition matrices); and material from the cloud VM period: `scripts/run_perf.sh`, `docs/build_commands.md`, `docs/optimization_log.md`, `docs/snapshots/` and `learning_notes/` | The studies are answered and their conclusions are listed above. The VM-period material describes withdrawn measurements or a workflow that is no longer used |
+| `archive/pre-cleanup-2026-10` | The two completed studies above with their reports; the tools only the launch-variance study used (object-placement build, GDB script, plot, hardware-counter summary, condition matrices); and material from the cloud VM period: `scripts/run_perf.sh`, `docs/build_commands.md`, `docs/optimization_log.md` and `docs/snapshots/` | The studies are answered and their conclusions are listed above. The VM-period material describes withdrawn measurements or a workflow that is no longer used |
 | `archive/variance-sources-2026-10` | The variance-sources study: six recordings and their report, the script that builds its diagnostic programs, and the condition matrices | The study is answered and its conclusions are listed above. The fixes it calls for are made in their own pull requests |
 | `archive/queue-regimes-2026-10` | The queue-regimes study: one recording and its report, the script that builds its diagnostic program, the condition matrix and the script that prints its tables | The study is answered and its conclusions are listed above. The fixes it calls for are made in their own pull requests |
 | `archive/queue-mechanism-2026-10` | The queue-mechanism study: two recordings and one launch as root with their report, the script that builds its diagnostic program, the two condition matrices, the helper that holds measurement mode for the root launch, and the script that prints its tables | The study is answered and its conclusions are listed above. The fixes it calls for are made in their own pull requests |
