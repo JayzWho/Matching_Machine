@@ -1,11 +1,6 @@
 /**
- * test_thread_placement.cpp
- *
- * thread_placement.h 的单元测试：
- *   1. PinnedThread 从创建起就只在指定 CPU 上运行；cpu < 0 时继承创建者的 CPU 掩码
- *   2. PinnedThread 的 joinable / join / 移动语义与 std::thread 相同；CPU 不可用时抛出
- *   3. allowed_cpu_pair() 只在调用线程正好能用两个 CPU 时给出 {编号小的, 编号大的}
- *   4. ScopedPin 把调用线程钉在指定 CPU 上，析构时恢复原来的掩码；cpu < 0 时不动
+ * thread_placement.h: PinnedThread runs only on its CPU from creation and otherwise
+ * behaves like std::thread; allowed_cpu_pair() and ScopedPin.
  */
 
 #include "thread_placement.h"
@@ -16,7 +11,7 @@
 
 using namespace me;
 
-// ─── 辅助工具 ────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 static cpu_set_t own_mask() {
     cpu_set_t set;
@@ -39,7 +34,7 @@ static cpu_set_t mask_of(std::initializer_list<int> cpus) {
     return set;
 }
 
-// 在测试线程上临时改用给定的 CPU 掩码，结束时恢复
+// Runs the test thread under the given CPU mask until destroyed.
 class ScopedMask {
 public:
     explicit ScopedMask(const cpu_set_t& set) : saved_(own_mask()) {
@@ -66,7 +61,7 @@ static Seen run_and_watch(int cpu) {
     return seen;
 }
 
-// ─── 1. 摆放 ─────────────────────────────────────────────────────────────────
+// ─── Placement ───────────────────────────────────────────────────────────────
 
 TEST(PinnedThreadTest, RunsOnlyOnItsCpu) {
     for (int cpu : cpus_in(own_mask())) {
@@ -83,7 +78,7 @@ TEST(PinnedThreadTest, UnpinnedThreadInheritsCreatorMask) {
     EXPECT_TRUE(CPU_EQUAL(&seen.mask, &creator));
 }
 
-// ─── 2. 与 std::thread 相同的语义 ─────────────────────────────────────────────
+// ─── std::thread semantics ───────────────────────────────────────────────────
 
 TEST(PinnedThreadTest, JoinableLikeStdThread) {
     PinnedThread empty;
@@ -103,7 +98,7 @@ TEST(PinnedThreadTest, JoinableLikeStdThread) {
 }
 
 TEST(PinnedThreadTest, UnavailableCpuThrows) {
-    const int outside = CPU_SETSIZE - 1;   // 不在本机上的 CPU 编号
+    const int outside = CPU_SETSIZE - 1;  // no such CPU on this machine
     const cpu_set_t mask = own_mask();
     ASSERT_FALSE(CPU_ISSET(outside, &mask));
     bool ran = false;
@@ -167,7 +162,7 @@ TEST(ScopedPinTest, NegativeCpuLeavesMaskAlone) {
 }
 
 TEST(ScopedPinTest, UnavailableCpuThrowsAndLeavesMaskAlone) {
-    const int outside = CPU_SETSIZE - 1;   // 不在本机上的 CPU 编号
+    const int outside = CPU_SETSIZE - 1;  // no such CPU on this machine
     const cpu_set_t before = own_mask();
     ASSERT_FALSE(CPU_ISSET(outside, &before));
     EXPECT_THROW(ScopedPin pin(outside), std::system_error);

@@ -1,24 +1,14 @@
 /**
- * bench_order_book.cpp
+ * Order book microbenchmarks. Each benchmark is a template over the book type and is
+ * registered twice: the _V3 instance runs the current me::OrderBook, the _V1 instance the
+ * book from before the optimizations (me_v1::OrderBookV1, order_book_v1.h). Both go
+ * through the same code and call add_order / cancel_order.
  *
- * Google Benchmark 套件：测量订单簿的撮合延迟与吞吐量。
+ * Most benchmarks rebuild their book every kBatchSize iterations inside PauseTiming, so
+ * every timed call meets the same book state. A counter checks that each iteration did
+ * the work it claims, and the benchmark reports an error otherwise.
  *
- * 测量场景：
- *   1. BM_AddOrder_NoMatch       — 纯挂单，无撮合（测基础插入开销）
- *   2. BM_AddOrder_FullMatch     — 一对一精确成交（最常见的热路径）
- *   3. BM_AddOrder_SweepLevels   — 大单扫穿多个价格档位（最坏情况）
- *   4. BM_CancelOrder            — 撤单操作延迟
- *   5. BM_MixedWorkload          — 混合流量（70% 挂单 + 20% 成交 + 10% 撤单）
- *
- * 每个场景是一个以订单簿类型为参数的模板，登记两次、紧挨着运行：名字以 _V3 结尾的
- * 用当前的订单簿（me::OrderBook），以 _V1 结尾的用优化前的订单簿（me_v1::OrderBookV1，
- * 见 order_book_v1.h）。两者走同一段基准代码，都调用 add_order / cancel_order，
- * 结果可以直接对比"优化前后"。
- *
- * 运行方式（必须用 Release 模式，Debug 数据无参考价值）：
- *   cmake --build build/release -j$(nproc)
- *   taskset -c 0 ./build/release/bench_order_book
- *   taskset -c 0 ./build/release/bench_order_book --benchmark_format=json > results.json
+ * Run through scripts/record/bench_record.py; see docs/BENCHMARKING.md.
  */
 
 #include <benchmark/benchmark.h>
@@ -34,13 +24,11 @@
 using namespace me;
 using me_v1::OrderBookV1;
 
-// ── 辅助工具 ────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
-// 构造一个简单限价单（不依赖 FeedSimulator）
-//
-// 时间戳预先写好（非零即可）：订单簿遇到时间戳为 0 的订单会自己读一次 TSC 补上，
-// 而流水线里生产者总会先写时间戳。不写的话，每个订单对象第一次进入计时区时多读一次 TSC，
-// 之后复用时又不读，各次迭代做的事不一样。
+// The timestamp is preset because the book stamps an order whose timestamp is 0, while
+// the pipeline's producer always stamps first. Without it an order object's first timed
+// call would read the TSC and its later reuses would not.
 static Order make_order(uint64_t id, Side side, int64_t price, int64_t qty) {
     Order o{};
     o.order_id     = id;
@@ -53,46 +41,36 @@ static Order make_order(uint64_t id, Side side, int64_t price, int64_t qty) {
     return o;
 }
 
-// 让订单回到送入订单簿之前的状态，同一批订单对象可以再送入一个新的订单簿
+// Returns an order to its state before it entered a book, for reuse in a new book.
 static void reset(Order& o) {
     o.filled_qty = 0;
     o.status     = OrderStatus::NEW;
 }
 
-// ── 1. 纯挂单，无撮合 ────────────────────────────────────────────────────────
-// 测量在无法成交时（买价始终低于卖价），add_order 的纯挂单开销。
-// 这是订单簿操作的下界延迟。
-//
-// 设计说明：
-//   - 预生成订单列表，避免循环内 make_order 构造开销混入计时。
-//   - 每 kBatchSize 次迭代在 PauseTiming 内重建订单簿（重挂固定背景卖单
-//     并清空累积的买单），保证每次 add_order 面对的树深度恒定在 kBgDepth，
-//     测出的是"稳态固定深度下的插入延迟"。
-//   - 不固定 Iterations，让框架自动决定（误差 < 0.5% 才停），结果更可信。
-//   - 当前订单簿的 add_order 在撮合前先为成交记录预留空间（trades.reserve(4)），即使不成交，
-//     计时区里每次也有一次 malloc/free；v1 不预留，不成交就不分配。
+// ── Add without a match ─────────────────────────────────────────────────────
+// Each iteration rests a buy below 100 ask levels. The book is rebuilt every batch, so
+// every add meets the same depth. v3's add_order reserves room for trades before
+// matching, so its timed region holds one malloc/free pair although nothing trades;
+// v1 allocates only when a trade occurs.
 template <class Book>
 static void BM_AddOrder_NoMatch(benchmark::State& state) {
-    constexpr int kBgDepth   = 100;   // 背景卖单档位数（固定盘口深度）
-    constexpr int kBatchSize = 1000;  // 每批重建一次订单簿
+    constexpr int kBgDepth   = 100;
+    constexpr int kBatchSize = 1000;
 
-    // 预生成背景卖单（ask 从 101 开始）
     std::vector<Order> bg_sells(kBgDepth);
     for (int i = 0; i < kBgDepth; ++i) {
         bg_sells[i] = make_order(static_cast<uint64_t>(10000 + i), Side::SELL,
                                  101'000'000 + i * 100'000, 10);
     }
 
-    // 预生成被测买单（买价 99，永远不与卖单成交）
-    // 使用不同的 order_id 区间（20000~20000+kBatchSize），避免与背景卖单冲突
+    // Bids at 99 never reach the asks from 101.
     std::vector<Order> buy_orders(kBatchSize);
     for (int i = 0; i < kBatchSize; ++i) {
         buy_orders[i] = make_order(static_cast<uint64_t>(20000 + i),
                                    Side::BUY, 99'000'000, 1);
     }
 
-    // 用 unique_ptr 持有订单簿，以便在 PauseTiming 内重建
-    // （OrderBookV1 含 std::mutex，不可直接移动赋值）
+    // Held by unique_ptr because OrderBookV1 holds a std::mutex and cannot be move-assigned.
     auto rebuild_book = [&]() {
         auto b = std::make_unique<Book>("BTCUSD");
         for (int i = 0; i < kBgDepth; ++i) b->add_order(&bg_sells[i]);
@@ -102,7 +80,6 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
 
     int idx = 0;
     for (auto _ : state) {
-        // 每批用完后重建，维持固定深度（把构造/重置开销放入 PauseTiming）
         if (idx == kBatchSize) {
             state.PauseTiming();
             book = rebuild_book();
@@ -110,7 +87,6 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
             idx = 0;
         }
 
-        // 直接用预生成的订单，零构造开销
         auto trades = book->add_order(&buy_orders[idx]);
         benchmark::DoNotOptimize(trades);
         ++idx;
@@ -121,21 +97,14 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
 BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, OrderBook)->Name("BM_AddOrder_NoMatch_V3");
 BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, OrderBookV1)->Name("BM_AddOrder_NoMatch_V1");
 
-// ── 2. 一对一精确成交 ────────────────────────────────────────────────────────
-// 每次迭代：一张买单与一张数量相同的卖单完全成交。卖单是它所在价格档位的唯一订单，
-// 成交后这一档被删除。这是最典型的热路径场景。
-//
-// 设计说明：
-//   - 与 NoMatch 相同的批量模式：每 kBatchSize 次迭代暂停计时一次，在暂停内重置这一批订单的
-//     状态、新建订单簿、挂好 kBatchSize 张卖单（价格逐档升高，一档一张）。第 i 次迭代的买单
-//     以第 i 档的价格下单，更低的档位已被前面的买单吃掉，它正好与第 i 档那张卖单成交。
-//   - 计数器 trades_per_iteration 是每次迭代的成交笔数，应恰为 1；不是 1 时报错。
-//   - 不固定 Iterations，由框架自动决定。
+// ── Add that fills one order ────────────────────────────────────────────────
+// Each iteration's buy fills the only sell of the best level, which then disappears.
+// A batch rests kBatchSize sells one per rising level; buy i is priced at level i,
+// whose lower levels earlier buys have taken.
 template <class Book>
 static void BM_AddOrder_FullMatch(benchmark::State& state) {
     constexpr int kBatchSize = 1000;
 
-    // 预生成卖单和买单（id 区间错开，互不冲突）
     std::vector<Order> sell_orders(kBatchSize);
     std::vector<Order> buy_orders(kBatchSize);
     for (int i = 0; i < kBatchSize; ++i) {
@@ -144,7 +113,7 @@ static void BM_AddOrder_FullMatch(benchmark::State& state) {
         buy_orders[i]  = make_order(static_cast<uint64_t>(40000 + i), Side::BUY,  price, 10);
     }
 
-    // 重置订单、新建订单簿并挂好卖单；旧订单簿在这里析构，都在暂停计时内
+    // The old book is destroyed here, inside PauseTiming.
     std::unique_ptr<Book> book;
     auto rebuild_book = [&]() {
         book = std::make_unique<Book>("BTCUSD");
@@ -166,7 +135,6 @@ static void BM_AddOrder_FullMatch(benchmark::State& state) {
             idx = 0;
         }
 
-        // 计时范围：买单触发撮合
         auto trades = book->add_order(&buy_orders[idx]);
         matched += static_cast<int64_t>(trades.size());
         benchmark::DoNotOptimize(trades);
@@ -181,20 +149,14 @@ static void BM_AddOrder_FullMatch(benchmark::State& state) {
 BENCHMARK_TEMPLATE(BM_AddOrder_FullMatch, OrderBook)->Name("BM_AddOrder_FullMatch_V3");
 BENCHMARK_TEMPLATE(BM_AddOrder_FullMatch, OrderBookV1)->Name("BM_AddOrder_FullMatch_V1");
 
-// ── 3. 大单扫穿多档（最坏情况） ──────────────────────────────────────────────
-// 测试参数化：state.range(0) 控制被扫穿的价格档位数 L。
-// 每次迭代：一张数量为 L 的买单依次吃掉 L 个价格档位，每档一张数量为 1 的卖单。
-//
-// 设计说明：
-//   - 与 NoMatch 相同的批量模式：每批暂停计时一次，在暂停内重置这一批订单的状态、
-//     新建订单簿、挂好约 1000 张卖单（价格逐档升高，一档一张）。一批 1000 / L 次迭代，
-//     第 s 次迭代的买单以第 s 组 L 档里最高的价格下单，更低的档位已被前面的买单吃掉，
-//     它正好吃完这一组 L 档后全部成交。
-//   - 计数器 trades_per_iteration 应恰为 L；不是 L 时报错。
+// ── Add that sweeps L levels ────────────────────────────────────────────────
+// L = state.range(0). Each iteration's buy of quantity L takes L levels of one sell
+// each. A batch rests about 1000 sells one per rising level; buy s is priced at the top
+// of the s-th group of L levels.
 template <class Book>
 static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     const int levels = static_cast<int>(state.range(0));
-    const int sweeps = 1000 / levels;  // 每批的迭代次数
+    const int sweeps = 1000 / levels;  // iterations per batch
 
     std::vector<Order> sell_orders(static_cast<size_t>(sweeps * levels));
     std::vector<Order> buy_orders(static_cast<size_t>(sweeps));
@@ -208,7 +170,7 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
                                    100'000'000 + (s * levels + levels - 1) * 100'000, levels);
     }
 
-    // 重置订单、新建订单簿并挂好卖单；旧订单簿在这里析构，都在暂停计时内
+    // The old book is destroyed here, inside PauseTiming.
     std::unique_ptr<Book> book;
     auto rebuild_book = [&]() {
         book = std::make_unique<Book>("BTCUSD");
@@ -230,7 +192,6 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
             idx = 0;
         }
 
-        // 计时范围：仅含扫穿撮合逻辑
         auto trades = book->add_order(&buy_orders[idx]);
         matched += static_cast<int64_t>(trades.size());
         benchmark::DoNotOptimize(trades);
@@ -242,19 +203,14 @@ static void BM_AddOrder_SweepLevels(benchmark::State& state) {
     if (matched != state.iterations() * levels) state.SkipWithError("an iteration did not sweep every level");
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));
 }
-// 分别测试扫穿 1、5、10、20 个价格档位
 BENCHMARK_TEMPLATE(BM_AddOrder_SweepLevels, OrderBook)->Name("BM_AddOrder_SweepLevels_V3")->Arg(1)->Arg(5)->Arg(10)->Arg(20);
 BENCHMARK_TEMPLATE(BM_AddOrder_SweepLevels, OrderBookV1)->Name("BM_AddOrder_SweepLevels_V1")->Arg(1)->Arg(5)->Arg(10)->Arg(20);
 
-// ── 4. 撤单操作延迟 ──────────────────────────────────────────────────────────
-// 每次迭代撤掉一张挂着的买单。它是所在价格档位的唯一订单，撤掉后这一档被删除。
-//
-// 设计说明：
-//   - 与 NoMatch 相同的批量模式：每 kBatchSize 次迭代暂停计时一次，在暂停内重置待撤订单的
-//     状态、新建订单簿（旧订单簿在这里析构）、挂好 kBatchSize 张待撤买单和 kBatchSize 张
-//     背景买单，两者价格交错、一档一张。背景买单不撤，让一批里订单簿始终有 kBatchSize 档以上。
-//   - 待撤订单按一个固定的乱序撤，撤单不总落在最优价或最差价一端。
-//   - 计数器 cancels_per_iteration 应恰为 1；有撤单失败时报错。
+// ── Cancel ──────────────────────────────────────────────────────────────────
+// Each iteration cancels a resting buy that is alone at its level. A batch rests
+// kBatchSize targets interleaved with kBatchSize background buys that stay, so the book
+// keeps at least kBatchSize levels; targets are cancelled in a fixed shuffled order so
+// that cancels do not always hit one end of the book.
 template <class Book>
 static void BM_CancelOrder(benchmark::State& state) {
     constexpr int kBatchSize = 1000;
@@ -292,7 +248,6 @@ static void BM_CancelOrder(benchmark::State& state) {
             idx = 0;
         }
 
-        // 计时范围：撤单
         cancelled += book->cancel_order(cancel_ids[idx]) ? 1 : 0;
         ++idx;
     }
@@ -305,20 +260,15 @@ static void BM_CancelOrder(benchmark::State& state) {
 BENCHMARK_TEMPLATE(BM_CancelOrder, OrderBook)->Name("BM_CancelOrder_V3");
 BENCHMARK_TEMPLATE(BM_CancelOrder, OrderBookV1)->Name("BM_CancelOrder_V1");
 
-// ── 5. 混合流量（模拟真实场景） ───────────────────────────────────────────────
-// 使用 FeedSimulator 生成真实分布的订单序列（限价单 + 撤单混合）
-// 并批量送入订单簿，测量平均每笔订单的处理吞吐量。
-//
-// 设计说明：
-//   - 每次迭代在暂停计时内重置全部订单的状态、新建订单簿（上一次迭代的订单簿在这里析构），
-//     所以每次迭代从空订单簿开始处理同一串订单，做的事完全相同。
-//   - 计数器 trades_per_iteration 是每次迭代的成交笔数；各次迭代不相同时报错。
+// ── Mixed workload ──────────────────────────────────────────────────────────
+// Replays 1,000,000 FeedSimulator orders (10% cancels) into an empty book. Each
+// iteration resets the orders and builds a new book inside PauseTiming, so every
+// iteration does the same work; differing trade counts are reported as an error.
 template <class Book>
 static void BM_MixedWorkload(benchmark::State& state) {
-    // 预生成订单（不计入 benchmark 时间）
     FeedSimulator sim("BTCUSD", 100'000'000, /*cancel_ratio=*/0.1, /*seed=*/42);
     auto orders = sim.generate_random(1000'000);
-    for (auto& o : orders) o.timestamp_ns = 1;  // 生成的时间戳为 0，原因见 make_order
+    for (auto& o : orders) o.timestamp_ns = 1;  // see make_order
 
     std::unique_ptr<Book> book;
     int64_t first_trades = -1;
@@ -345,7 +295,6 @@ static void BM_MixedWorkload(benchmark::State& state) {
 
     state.counters["trades_per_iteration"] = static_cast<double>(first_trades);
     if (!same_every_iteration) state.SkipWithError("iterations produced different numbers of trades");
-    // 报告每秒处理的订单数
     state.SetItemsProcessed(
         static_cast<int64_t>(state.iterations()) *
         static_cast<int64_t>(orders.size()));

@@ -6,7 +6,7 @@
 
 using namespace me;
 
-// ── 单线程基础功能测试 ────────────────────────────────────────────────────────
+// ── One thread ───────────────────────────────────────────────────────────────
 
 TEST(SPSCRingBufferTest, InitiallyEmpty) {
     SPSCRingBuffer<int, 8> rb;
@@ -33,24 +33,24 @@ TEST(SPSCRingBufferTest, FIFOOrder) {
     for (int i = 0; i < 5; ++i) {
         int val = -1;
         EXPECT_TRUE(rb.try_pop(val));
-        EXPECT_EQ(val, i);  // 先进先出
+        EXPECT_EQ(val, i);
     }
 }
 
 TEST(SPSCRingBufferTest, FullReturnsFalse) {
-    // Capacity=4，实际可用 3 个（一个槽位作"满"的标志）
+    // Capacity 4 holds 3: one slot stays empty to tell full from empty.
     SPSCRingBuffer<int, 4> rb;
     EXPECT_TRUE(rb.try_push(1));
     EXPECT_TRUE(rb.try_push(2));
     EXPECT_TRUE(rb.try_push(3));
-    EXPECT_FALSE(rb.try_push(4));  // 第 4 个插入失败，队列满
+    EXPECT_FALSE(rb.try_push(4));
     EXPECT_EQ(rb.size(), 3u);
 }
 
 TEST(SPSCRingBufferTest, EmptyReturnsFalse) {
     SPSCRingBuffer<int, 8> rb;
     int val = 0;
-    EXPECT_FALSE(rb.try_pop(val));  // 空队列弹出失败
+    EXPECT_FALSE(rb.try_pop(val));
 }
 
 TEST(SPSCRingBufferTest, OptionalInterface) {
@@ -65,8 +65,8 @@ TEST(SPSCRingBufferTest, OptionalInterface) {
 }
 
 TEST(SPSCRingBufferTest, WrapAround) {
-    // 测试环形回绕：写满后读空，再写入，验证索引回绕正确
-    SPSCRingBuffer<int, 4> rb;  // 实际容量 3
+    // Fill, drain and fill again so that the indices wrap.
+    SPSCRingBuffer<int, 4> rb;
     EXPECT_TRUE(rb.try_push(1));
     EXPECT_TRUE(rb.try_push(2));
     EXPECT_TRUE(rb.try_push(3));
@@ -75,7 +75,6 @@ TEST(SPSCRingBufferTest, WrapAround) {
     EXPECT_TRUE(rb.try_pop(val)); EXPECT_EQ(val, 1);
     EXPECT_TRUE(rb.try_pop(val)); EXPECT_EQ(val, 2);
 
-    // 索引已回绕，继续写入
     EXPECT_TRUE(rb.try_push(4));
     EXPECT_TRUE(rb.try_push(5));
 
@@ -86,16 +85,14 @@ TEST(SPSCRingBufferTest, WrapAround) {
 }
 
 TEST(SPSCRingBufferTest, CapacityConstant) {
-    // 容量是编译期常量
     EXPECT_EQ((SPSCRingBuffer<int, 8>::capacity()), 7u);    // Capacity-1
     EXPECT_EQ((SPSCRingBuffer<int, 16>::capacity()), 15u);
     EXPECT_EQ((SPSCRingBuffer<int, 1024>::capacity()), 1023u);
 }
 
-// ── 并发正确性测试 ────────────────────────────────────────────────────────────
+// ── Two threads ──────────────────────────────────────────────────────────────
 
 TEST(SPSCRingBufferTest, ConcurrentProducerConsumer) {
-    // 生产者线程写入 10000 个元素，消费者线程读取，验证数据完整且有序
     constexpr int kCount = 10000;
     SPSCRingBuffer<int, 1024> rb;
 
@@ -105,7 +102,6 @@ TEST(SPSCRingBufferTest, ConcurrentProducerConsumer) {
     std::thread producer([&]() {
         for (int i = 0; i < kCount; ++i) {
             while (!rb.try_push(i)) {
-                // 队列满时自旋等待
             }
         }
     });
@@ -131,7 +127,6 @@ TEST(SPSCRingBufferTest, ConcurrentProducerConsumer) {
 }
 
 TEST(SPSCRingBufferTest, ConcurrentSum) {
-    // 验证并发传输的数据无丢失：生产者发送 0..999，消费者求和
     constexpr int kCount = 1000;
     SPSCRingBuffer<int, 256> rb;
 

@@ -12,17 +12,17 @@
 
 namespace me {
 
-/// 两个工作线程各自钉在哪个 CPU 上；-1 表示不钉，由调度器摆放（原来的行为）。
+/// CPUs for the two pipeline threads; -1 leaves a thread to the scheduler.
 struct ThreadCpus {
     int producer = -1;
     int consumer = -1;
 };
 
 /**
- * @brief 调用线程能用的 CPU 正好两个时，返回 {编号小的, 编号大的}，用作 {生产者, 消费者}
- *
- * 录制器用 taskset 把双线程基准限定在两个测量核上，基准由此得知该把两个线程放在哪里。
- * 能用的 CPU 不是正好两个时返回 {-1, -1}：不钉核，与原来相同。
+ * When the calling thread may run on exactly two CPUs, returns {lower, higher} as
+ * {producer, consumer}; otherwise {-1, -1}. The recorder confines each two-threaded
+ * benchmark to the two measurement cores with taskset, and this is how the benchmark
+ * learns which they are.
  */
 inline ThreadCpus allowed_cpu_pair() noexcept {
     cpu_set_t set;
@@ -42,15 +42,11 @@ inline ThreadCpus allowed_cpu_pair() noexcept {
 }
 
 /**
- * @brief 创建时就钉在指定 CPU 上的线程，用法同 std::thread
- *
- * std::thread 不能在创建时指定 CPU。先创建、再用 pthread_setaffinity_np 改亲和性，
- * 新线程会先在创建者所在的核上起步，之后才被迁走。这里在 pthread_create 之前用
- * pthread_attr_setaffinity_np 设好亲和性，线程从第一条指令起就在目标 CPU 上。
- * cpu < 0 时不设亲和性，与 std::thread 相同：继承创建者的 CPU 掩码。
- *
- * 只保存一个 pthread_t，大小与 std::thread 相同（见文件末尾的断言），
- * 替换 std::thread 成员后，所在对象的内存布局不变。
+ * A thread pinned to a CPU from its first instruction. Setting the affinity after
+ * std::thread starts lets the thread begin on its creator's core and migrate later, so
+ * the affinity is set on the pthread attributes before pthread_create. With cpu < 0 it
+ * behaves like std::thread and inherits the creator's CPU mask. It has the size of
+ * std::thread so that replacing one keeps the enclosing object's layout.
  */
 class PinnedThread {
 public:
@@ -75,10 +71,10 @@ public:
             id_ = 0;
             throw std::system_error(err, std::generic_category(), "PinnedThread");
         }
-        state.release();  // 新线程接管，在 run() 结束时释放
+        state.release();  // owned by the new thread from here; run() frees it
     }
 
-    // 与 std::thread 相同：仍可 join 的线程被析构或覆盖，直接终止进程
+    // As with std::thread, destroying or overwriting a joinable thread terminates.
     ~PinnedThread() {
         if (joinable()) std::terminate();
     }
@@ -117,8 +113,8 @@ private:
         return nullptr;
     }
 
-    // 0 表示没有线程：glibc 的 pthread_t 是线程描述符的地址，不会是 0，
-    // libstdc++ 的 std::thread 也用 0 表示"不可 join"
+    // 0 means no thread: glibc's pthread_t is a descriptor address and never 0, and
+    // libstdc++'s std::thread uses 0 the same way.
     pthread_t id_ = 0;
 };
 
@@ -126,11 +122,9 @@ static_assert(sizeof(PinnedThread) == sizeof(std::thread),
               "PinnedThread must keep the layout of the objects whose std::thread members it replaces");
 
 /**
- * @brief 把调用线程钉在一个 CPU 上，析构时恢复原来的 CPU 掩码
- *
- * 用于主线程自己当生产者的基准：在计时循环之前钉核，基准函数返回时恢复。
- * 主线程在两个基准之间仍能用原来的 CPU，下一个基准的 allowed_cpu_pair() 依赖这一点。
- * cpu < 0 时什么也不做，与 PinnedThread 相同。
+ * Pins the calling thread to one CPU and restores its previous mask on destruction. For
+ * benchmarks whose main thread is the producer: restoring the mask lets the next
+ * benchmark's allowed_cpu_pair() see both CPUs again. Does nothing for cpu < 0.
  */
 class ScopedPin {
 public:

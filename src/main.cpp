@@ -8,11 +8,10 @@ int main() {
 
     std::cout << "=== Low-Latency Matching Engine Demo ===\n\n";
 
-    // 初始化撮合引擎，注册品种 BTCUSD，基准价 100,000,000（= 100.000000）
+    // Prices are in units of 1e-6: 100'000'000 is 100.000000.
     MatchingEngine engine;
     engine.add_symbol("BTCUSD", 100'000'000);
 
-    // 生成模拟行情数据（1000 条，20% 为撤单）
     FeedSimulator feed("BTCUSD", 100'000'000, /*cancel_ratio=*/0.2, /*seed=*/42);
     auto orders = feed.generate_random(1000);
 
