@@ -4,7 +4,7 @@
 
 An exchange matching engine in C++20, built to apply and measure the low-latency techniques used
 in trading infrastructure. On an Intel Core i5-1135G7 it processes 3.5 million orders per second,
-2.3 times the mutex-based design it replaced.
+2.3 times a mutex-based baseline.
 
 ---
 
@@ -17,8 +17,8 @@ in trading infrastructure. On an Intel Core i5-1135G7 it processes 3.5 million o
 - **No per-order allocation of orders or trades**: orders come from the memory pool and trades
   go into a pre-allocated buffer. The order book still allocates when it opens a price level or
   a level's vector grows.
-- **Reproducible measurement on bare metal**: the earlier design is kept as a baseline and
-  measured on the same machine as the current code. Scripts put the machine into a measurement
+- **Reproducible measurement on bare metal**: a mutex-based baseline is kept in the repository
+  and measured on the same machine as the engine. Scripts put the machine into a measurement
   mode, launch each benchmark program 32 times, check every launch for throttling and
   interrupts, and calibrate the TSC.
 
@@ -26,24 +26,28 @@ in trading infrastructure. On an Intel Core i5-1135G7 it processes 3.5 million o
 
 ## 2. Performance
 
-| Measure | Earlier design | Current | Ratio |
-|---------|---------------:|--------:|:-----:|
-| Pipeline throughput, 100K orders, two threads | 1.52 M orders/s | 3.50 M orders/s | 2.30× |
-| Order book alone, replay of 1M generated orders, one thread | 299.8 ms | 214.6 ms | 1.40× |
-| Service time per order in the pipeline, P50 / P99.9 | 255 ns / 2.59 µs | 209 ns / 975 ns | |
+| What is measured | Metric | Mutex baseline | Lock-free engine | Speedup |
+|------------------|--------|---------------:|-----------------:|:-------:|
+| Whole pipeline, two threads | Throughput | 1.52 M orders/s | 3.50 M orders/s | 2.30× |
+| Order book only, one thread | Throughput | 3.34 M orders/s | 4.66 M orders/s | 1.40× |
+| Whole pipeline, two threads | Matching latency per order, P50 / P99.9 | 255 ns / 2.59 µs | 209 ns / 975 ns | |
 
-The earlier design passes orders through a queue guarded by `std::mutex` and
-`std::condition_variable`, allocates every order on the heap, and matches with an order book that
-takes a mutex and keeps a `std::deque` per price level and a `std::unordered_map` index. The
-pipeline row therefore compares two whole systems; the order book row compares the two books
-alone. The seven benchmarks that time a single order book operation, from adding one order to
-sweeping 20 price levels or cancelling, improve by 1.28× to 1.59×.
+The mutex baseline is the design the engine replaced, kept in the repository for comparison. Its
+pipeline passes orders through a queue guarded by `std::mutex` and `std::condition_variable` and
+allocates every order on the heap; its order book takes a mutex and keeps a `std::deque` per
+price level and a `std::unordered_map` index. The pipeline rows compare the two whole systems;
+the order book row compares the two books alone. The seven benchmarks that time a single order
+book operation, from adding one order to sweeping 20 price levels or cancelling, improve by
+1.28× to 1.59×.
 
-Each benchmark program was launched 32 times, and each value is the median of the launch medians;
-at 100K orders the pipeline speedup lies between 2.18× and 2.52× in every launch. Throughput is
-wall-clock time per run, thread start-up included. Service time is the time the consumer spends
-on one order, from taking it out of the queue until matching is done; it is read with the TSC and
-converted with the TSC frequency calibrated during the recording, 2.419 GHz.
+Pipeline throughput is 100K orders divided by the wall-clock time of a run, thread start-up
+included. Order book throughput is 1M generated orders divided by the time to replay them into
+an empty book. Matching latency, called service time in the full results, is the time the
+consumer thread spends on one order, from taking it out of the queue until matching is done; it
+is read with the TSC and converted with the TSC
+frequency calibrated during the recording, 2.419 GHz. Each benchmark program was launched 32
+times, and each value is the median of the launch medians; the pipeline speedup lies between
+2.18× and 2.52× in every launch.
 
 > **Machine**: Intel Core i5-1135G7, bare metal, cores held at the 2.4 GHz base frequency, turbo
 > off, SMT siblings offline; kernel 7.0.0-34-generic; GCC 15.2.0, Release (`-O2`).
@@ -160,7 +164,7 @@ every launch.
 ```
 include/, src/   The engine: order, order book, SPSC ring, memory pool, trade buffer, pipeline
 tests/           GoogleTest suites, run by ctest
-benchmarks/      Google Benchmark programs, with the earlier order book and pipeline as baselines
+benchmarks/      Google Benchmark programs, with the mutex baseline's order book and pipeline
 scripts/         Measurement tooling: env/ (measurement mode), record/, report/, diagnostics/
 docs/            RESULTS.md, BENCHMARKING.md, AUDIT.md, and evidence/ with the raw recordings
 ```
