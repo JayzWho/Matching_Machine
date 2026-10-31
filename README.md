@@ -2,37 +2,32 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
-A high-performance exchange matching engine built in C++20, featuring a lock-free SPSC pipeline,
-custom memory pool, and RDTSC latency measurement. Designed to demonstrate
-low-latency systems programming techniques applicable to HFT and quantitative trading infrastructure.
+An exchange matching engine in C++20 with a lock-free two-thread pipeline, a custom memory
+pool and TSC-based latency measurement. It was built to apply and measure the low-latency
+techniques used in trading infrastructure. Every performance figure below comes from a
+recorded study on bare metal that the repository's tools can reproduce.
 
 ---
 
-## 1. Project Overview
+## 1. Overview
 
-Modern electronic exchanges must process millions of orders per second with sub-millisecond
-latency. This project implements the core matching engine component from scratch:
-
-- **Price-time priority matching** (FIFO within each price level) with full Limit/Cancel order support
-- **Lock-free producer-consumer pipeline**: orders flow from a feed simulator through an SPSC ring
-  buffer into the order book, with no mutexes on the hot path
-- **No per-order allocation of orders or trades**: orders come from a custom memory pool and
-  trades go into a pre-allocated `TradeRingBuffer`; the order book still allocates when it
-  opens a price level or a level's vector grows
+- **Price-time priority matching** of limit orders and cancels, FIFO within each price level.
+- **Lock-free pipeline**: a producer thread feeds orders through an SPSC ring buffer to a
+  consumer thread that matches them; a second ring returns finished orders to the producer's
+  memory pool. No mutex is taken on the hot path.
+- **No per-order allocation of orders or trades**: orders come from the memory pool and trades
+  go into a pre-allocated buffer. The order book still allocates when it opens a price level or
+  a level's vector grows.
 - **Measured against what it replaced**: the order book from before the optimizations and a
-  mutex-based pipeline are kept as benchmark baselines and recorded on the same machine as
-  the current code; latency is reported as queue time and service time, in TSC ticks
+  mutex-based pipeline are kept as baselines and recorded on the same machine as the current code.
 
-The project evolved through an optimization cycle:
-mutex baseline → cache-friendly data structures → lock-free SPSC → allocation-free orders and trades.
-A methodology audit ([`docs/AUDIT.md`](docs/AUDIT.md)) found defects in the benchmarks; they were
-fixed, and §4 reports the fixed benchmarks on bare metal.
+A methodology audit ([`docs/AUDIT.md`](docs/AUDIT.md)) found defects in the original benchmarks.
+They were fixed, and the figures first published from a cloud VM were withdrawn; they are kept at
+the tag `v1.0-vm-era`.
 
 ---
 
-## 2. System Architecture
-
-### 2.1 High-Level Pipeline
+## 2. Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -40,14 +35,13 @@ fixed, and §4 reports the fixed benchmarks on bare metal.
 │                                                                              │
 │   Producer Thread                              Consumer Thread               │
 │   ─────────────────────────────                ────────────────────────────  │
-│   FeedSimulator::generate_random()                                           │
+│   FeedSimulator::generate_into()                                             │
 │     │                                                                        │
 │     ▼                                                                        │
 │   OrderMemoryPool::allocate()                                                │
 │     │  O(1), no malloc                                                       │
 │     ▼                                                                        │
 │   slot->timestamp_ns = RDTSC()                                               │
-│     │  latency measurement start                                             │
 │     │                                                                        │
 │     │   try_push() [release]                                                 │
 │     ▼ ── order_queue_ (Producer → Consumer) ──►    try_pop() [acquire]       │
@@ -57,7 +51,6 @@ fixed, and §4 reports the fixed benchmarks on bare metal.
 │                             price-time priority match │                      │
 │                                                       ▼                      │
 │                                      TradeRingBuffer<4096>                   │
-│                          push_trade()  (array write)  │                      │
 │                                                       │                      │
 │                    try_push(filled Order*) [release]  ▼                      │
 │    ◄─ return_queue_ (Consumer → Producer)─────────────┘                      │
@@ -65,90 +58,57 @@ fixed, and §4 reports the fixed benchmarks on bare metal.
 │     │                                                                        │
 │     ▼                                                                        │
 │   OrderMemoryPool::deallocate()                                              │
-│     │  exclusively on producer thread                                        │
+│        only the producer thread touches the pool                             │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Two SPSC queues** form the backbone:
-- `order_queue_` — Producer → Consumer (forward data flow)
-- `return_queue_` — Consumer → Producer (return filled `Order*` for pool reclamation)
-
-`OrderMemoryPool` is accessed **exclusively by the producer thread** (allocate + deallocate),
-with memory ownership transferred through the two SPSC queues' `acquire`/`release` semantics.
-No mutex is needed anywhere in steady-state processing.
-
-### 2.2 OrderBook Data Structure
-
-```
-bid_levels_   std::map<price, PriceLevel, std::greater<>>
-               │
-               └── PriceLevel { std::vector<Order*> orders; size_t head; }
-                    head游标 (lazy pop_front, no element shift)
-                    compact() when holes > 50%
-
-ask_levels_   std::map<price, PriceLevel>  (ascending)
-
-order_index_  absl::flat_hash_map<order_id, Order*>
-               reserve(65536) at construction
-```
-
-### 2.3 Order Lifecycle
-
-```
-pool.allocate()
-    │ placement new, O(1)
-    ▼
-[Producer: fill fields, write RDTSC timestamp]
-    │ try_push(slot)   [release]
-    ▼
-[Consumer: try_pop]   [acquire — all writes visible]
-    │
-    ├─→ immediate fill / cancel → return_queue_.try_push → pool.deallocate
-    │
-    └─→ resting (added to PriceLevel)
-              │
-              ▼  matched by future incoming order
-         deallocator(resting) → return_queue_.try_push → pool.deallocate
-```
+| Component | Implementation | Why |
+|-----------|----------------|-----|
+| Order queues | `SPSCRingBuffer<T, N>` | Acquire/release ordering, no lock or system call; `head_` and `tail_` on separate cache lines |
+| Memory | `OrderMemoryPool`, a free list | O(1) allocate and free, used only by the producer; ownership moves through the two queues |
+| Price levels | `std::map` of `PriceLevel` (vector + head cursor) | Best price at `begin()`; the head cursor pops from the front without shifting elements |
+| Order index | `absl::flat_hash_map` | Order ID to resting order, for cancels |
+| Trades | `TradeRingBuffer<4096>` | Pre-allocated, replaces the `std::vector<Trade>` that `add_order` returns |
+| Latency | RDTSC between two `lfence` | A timestamp read without a system call; values are TSC ticks |
 
 ---
 
-## 3. Core Technologies
+## 3. Scope and Limitations
 
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| Order queue | `SPSCRingBuffer<T, N>` (custom) | No mutex, no syscall; acquire/release memory order; `head_`/`tail_` each `alignas(64)` eliminates false sharing between producer/consumer cores |
-| Memory management | `OrderMemoryPool` (custom free-list) | O(1) allocate and free on the producer thread, with no `malloc` and no lock per order |
-| Trade collection | `TradeRingBuffer<4096>` (custom) | Replaces the `std::vector<Trade>` that `add_order` allocates for every call |
-| Order index | `absl::flat_hash_map` (Swiss Table) | Open addressing with SIMD group probing; 65,536 slots reserved up front |
-| Price levels | `std::map` + `PriceLevel` vector + head cursor | `std::map::begin()` = best price in O(1); vector head cursor replaces `deque` for cache-friendly sequential access |
-| Latency measurement | RDTSC between two `lfence` + P-quantile sort | Reads the timestamp counter without a system call, and the fences keep each reading at its place in the code. Queue time subtracts a producer-core reading from a consumer-core reading: acquire/release makes the timestamp visible, and the comparison relies on the cores' TSCs being synchronised, which the kernel checks at boot |
-| Build | CMake + FetchContent | Google Benchmark and GoogleTest fetched at configure time; Abseil resolved system-first with a pinned source fallback |
+- **Matching core only.** Trades are meant to be taken by a downstream consumer that stores or
+  publishes them. `TradeRingBuffer` stands in for that consumer: it keeps the most recent trades
+  and overwrites older ones. The figures cover matching and writing the trade record, not
+  delivering trades.
+- **Synthetic order flow.** `FeedSimulator` draws prices around a fixed base price and picks the
+  target of a cancel at random among earlier order IDs, so many cancels find no resting order.
+  The results compare implementations under this workload; they do not describe behaviour on
+  real market data.
+- **Trusted input.** The engine assumes that upstream checks have run: live order IDs are unique
+  and quantities are positive. It does not check them itself.
+- **Fixed capacity.** The memory pool is sized for the benchmark workloads. When it runs out, the
+  producer waits for orders to come back.
+- **One machine.** All figures come from one CPU model and describe that machine.
 
 ---
 
-## 4. Performance & Results
+## 4. Results
 
-Every number in this section comes from one recording, the current control in
+All numbers come from one recording,
 [`docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-30_15-55-52_46cf493_control/`](docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-30_15-55-52_46cf493_control/),
-and describes the code at commit `46cf493`.
+of the code at commit `999c956` (recorded as `46cf493` before the history was rewritten; see
+[`docs/evidence/`](docs/evidence/README.md#commit-ids)).
 
-> **Machine**: Intel Core i5-1135G7, bare metal, cores held at the 2.4 GHz base frequency with
-> turbo off and SMT siblings offline; Ubuntu with kernel 7.0.0-34-generic; GCC 15.2.0, Release (`-O2`).
-> **Method**: each benchmark program was launched 32 times, with 6 repetitions of every benchmark
-> per launch and the first left out as a warm-up. A launch is represented by the median of its
-> repetitions, and each value below is the median of the 32 launch medians.
+> **Machine**: Intel Core i5-1135G7, bare metal, cores held at the 2.4 GHz base frequency, turbo
+> off, SMT siblings offline; kernel 7.0.0-34-generic; GCC 15.2.0, Release (`-O2`).
+> **Method**: each benchmark program was launched 32 times, with 6 repetitions per benchmark and
+> launch and the first left out as warm-up. Each value is the median of the 32 launch medians.
 > [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md) describes how a recording is made and checked.
 
-The figures first published in this section were measured on a cloud VM with benchmarks that a
-methodology audit ([`docs/AUDIT.md`](docs/AUDIT.md)) later found defective. They are kept at the
-tag `v1.0-vm-era`.
+### 4.1 Order Book, Before and After the Optimizations (one thread)
 
-### 4.1 Order Book: Before and After the Optimizations (one thread)
-
-`v1` is the order book from before the optimizations (`std::mutex`, a `std::deque` per price
-level, an `std::unordered_map` index), kept in `benchmarks/order_book_v1.h`. `v3` is the current
-one. `bench_order_book` runs both through the same benchmark code.
+`v1` is the order book from before the optimizations (`std::mutex`, a `std::deque` per level,
+`std::unordered_map` index), kept in `benchmarks/order_book_v1.h`; `v3` is the current one. Both
+run through the same benchmark code.
 
 | Benchmark | Timed work per iteration | v1 | v3 | v1 / v3 |
 |-----------|--------------------------|---:|---:|:-------:|
@@ -161,36 +121,29 @@ one. `bench_order_book` runs both through the same benchmark code.
 | `BM_CancelOrder` | Cancel a resting order that is alone at its level | 277.9 ns | 206.3 ns | 1.35× |
 | `BM_MixedWorkload` | Replay 1,000,000 generated orders (10% cancels) into an empty book | 299.8 ms | 214.6 ms | 1.40× |
 
-Launch medians vary by a coefficient of variation (CV) of 0.2% to 1.7%, with one exception:
-about one repetition in five of v3's `BM_AddOrder_NoMatch` runs 1.2 to 2.5 times slower, together
-with many page faults. The cause is not established; the median absorbs it, and the
-[report of the recording](docs/evidence/11th-Gen-Intel-Core-i5-1135G7/2026-10-30_15-55-52_46cf493_control/REPORT.md)
-describes it. In this benchmark v3's `add_order` reserves room for trades before it matches, so
-its timed region holds one `malloc`/`free` pair per order although nothing trades; v1 allocates
-only when a trade occurs.
+Launch medians vary by a coefficient of variation (CV) of 0.2% to 1.7%. The exception is v3's
+`BM_AddOrder_NoMatch`, where about one repetition in five runs 1.2 to 2.5 times slower with many
+page faults; the cause is open and the median absorbs it. In that benchmark v3's `add_order`
+reserves room for trades before matching, so its timed region holds one `malloc`/`free` pair per
+order although nothing trades.
 
-**`add_order_noalloc`.** The pipeline's consumer calls `add_order_noalloc`, which writes trades
-into a pre-allocated `TradeRingBuffer` instead of returning a `std::vector<Trade>`.
-`bench_matching_engine` replays one stream of 10,000 generated orders (20% cancels) through each
-interface of the v3 book:
+The pipeline's consumer calls `add_order_noalloc`, which writes trades into the pre-allocated
+buffer. Replaying one stream of 10,000 generated orders (20% cancels) through each interface of
+the v3 book:
 
 | Benchmark | Interface | Time per order |
 |-----------|-----------|---------------:|
 | `BM_SingleThread_Baseline_AddOrder` | `add_order` and `cancel_order` | 138.5 ns |
 | `BM_SingleThread_Baseline` | `add_order_noalloc` | 126.0 ns |
 
-`add_order_noalloc` takes 12.5 ns (9%) less per order. This compares the two interfaces as a
-whole, including what the compiler inlines into each; it cannot separate the allocation from the
-rest of the call.
+This compares the two interfaces as a whole, including what the compiler inlines into each.
 
 ### 4.2 Pipeline Throughput
 
-Both pipelines run a producer thread that generates orders and a consumer thread that matches
-them, each pinned to its own core. The SPSC pipeline is the current engine. The mutex pipeline
-(`bench_baseline_mutex`) is the earlier system as a whole and differs in three ways at once: a
-queue guarded by `std::mutex` and `std::condition_variable` instead of two SPSC rings, the v1
-order book, and a heap allocation (`make_shared`) per order instead of the memory pool. The
-speedup therefore compares two systems, not two queues.
+Both pipelines run a producer and a consumer thread, each pinned to its own core. The mutex
+pipeline (`bench_baseline_mutex`) is the earlier system as a whole: a queue guarded by
+`std::mutex` and `std::condition_variable`, the v1 order book, and a heap allocation per order.
+The speedup compares two systems, not two queues.
 
 | Orders per run | Mutex pipeline | SPSC pipeline | Speedup |
 |---------------:|:--------------:|:-------------:|:-------:|
@@ -198,16 +151,15 @@ speedup therefore compares two systems, not two queues.
 | 50K  | 33.1 ms (1.51 M orders/s) | 13.2 ms (3.79 M orders/s) | 2.51× |
 | 100K | 65.7 ms (1.52 M orders/s) | 28.6 ms (3.50 M orders/s) | **2.30×** |
 
-Times are wall-clock time per run, thread start-up included. Launch medians vary by a CV of 2.1%
-to 4.9%, and at 100K orders the speedup lies between 2.18× and 2.52× in every one of the 32
-rounds.
+Times are wall-clock per run, thread start-up included. Launch medians vary by a CV of 2.1% to
+4.9%; at 100K orders the speedup lies between 2.18× and 2.52× in all 32 launches.
 
 ### 4.3 Latency at 100K Orders
 
-A separate run of each pipeline records two times per order: **queue time**, from the producer's
-timestamp to the moment the consumer takes the order out of the queue, and **service time**, from
-then until matching is done. Values are TSC ticks; the nanoseconds use the TSC frequency
-calibrated during the recording, 2.419 GHz.
+A separate run records two times per order: **queue time**, from the producer's timestamp until
+the consumer takes the order out of the queue, and **service time**, from then until matching is
+done. Values are TSC ticks, converted with the TSC frequency calibrated during the recording,
+2.419 GHz.
 
 | Pipeline, quantity | P50 | P99 | P99.9 | CV of P50 over launches |
 |--------------------|----:|----:|------:|------------------------:|
@@ -217,17 +169,15 @@ calibrated during the recording, 2.419 GHz.
 | Mutex, queue time   | 7.29 M ticks (3.01 ms) | 16.8 M ticks (6.92 ms) | 16.9 M ticks (7.00 ms) | 26% |
 
 Service time is what one order costs the consumer. Queue time is measured at full load: the
-producer outruns the consumer, so each order waits behind a full queue. In the SPSC pipeline that
-is the 4,095 orders of the full ring; the mutex queue has no bound, so its length, and the queue
-time with it, moves from launch to launch. Only this run reads the TSC for every order, and the
-fences around each reading slow its consumer by about 24%, so the queue time is that of a slower
-consumer than in §4.2.
+producer outruns the consumer, so each order waits behind a full queue, the 4,095 slots of the
+SPSC ring or an unbounded mutex queue. The fences around each reading slow this run's consumer by
+about 24% compared with §4.2.
 
 ### 4.4 Queue Microbenchmarks
 
 `bench_spsc_ring_buffer` moves items from a producer thread to a consumer thread. Each launch
-measures every benchmark on 16 freshly allocated memory regions in both assignments of the two
-threads to the two cores: 32 instances per benchmark and launch.
+measures every benchmark on 16 freshly allocated memory regions, in both assignments of the two
+threads to the two cores.
 
 | Benchmark | Items | Time per item |
 |-----------|------:|---------------|
@@ -237,142 +187,75 @@ threads to the two cores: 32 instances per benchmark and launch.
 | `BM_Mutex_ProducerConsumer` (int64, mutex queue) | 10K  | median 300.4 ns, quartiles 286 to 318 ns |
 | `BM_Mutex_ProducerConsumer` (int64, mutex queue) | 100K | median 303.2 ns, quartiles 287 to 322 ns |
 
-The int64 ring runs in one of two states, a property of the queue rather than noise. When the
-slice of the last-level cache that serves the ring's `tail_` index is the slice of the producer's
-core, the producer slows down and the consumer speeds up, so the consumer catches up; from then on
-the two sides contend for the cache line being written, at about seven times the cost per item.
-The memory region sets the slice and the thread assignment sets the core: 29% and 22% of the
-instances were slow in the two assignments, and no region was slow in both. The Order ring has no
-such amplifier, and the same placement makes it about 20% slower, hence its median and quartiles.
-The investigation is kept at the tags `archive/queue-regimes-2026-10` and
+The int64 ring runs in a fast or a slow state, set by the memory region and the thread
+assignment rather than by noise. The physical structure of the last-level cache's slices slightly
+changes the speed of the producer and the consumer, and this splits the ring into the two states.
+Which physical structure is responsible, and how it produces the two states, needs further
+investigation. The studies so far are kept at the tags `archive/queue-regimes-2026-10` and
 `archive/queue-mechanism-2026-10`.
 
 ---
 
-## 5. Build & Run
+## 5. Build, Test and Run
 
-### Prerequisites
-
-- GCC 11+ (C++20) — verified on GCC 15.2
-- CMake 3.20+ — verified on CMake 4.2
-- Internet access on first configure (GoogleTest and Google Benchmark are fetched
-  by `FetchContent`)
+Requires GCC 11+ (verified on GCC 15.2), CMake 3.20+ (verified on CMake 4.2) and internet access
+on the first configure, which fetches GoogleTest and Google Benchmark. Installing `libabsl-dev`
+is optional and saves building Abseil from source in Release.
 
 ```bash
-# Debian / Ubuntu
 sudo apt install cmake libabsl-dev
-```
 
-`libabsl-dev` is optional but recommended: Abseil is resolved system-first, and
-without it CMake falls back to building Abseil 20260107.0 from source, which adds
-several minutes to the first configure.
-
-### Build
-
-```bash
-# Release (for benchmarks and latency measurements)
+# Release, for benchmarks
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/release -j$(nproc)
 
-# Debug (for tests; ASan + UBSan enabled)
+# Debug, for tests (ASan + UBSan)
 cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build build/debug -j$(nproc)
-```
-
-> **Debug builds always compile Abseil from source**, even when `libabsl-dev` is
-> installed. Abseil's SwissTable changes its small-object-optimization layout under
-> AddressSanitizer, so sanitizer-instrumented code linked against a non-instrumented
-> system `libabsl.so` aborts inside Abseil at runtime. The first Debug configure is
-> therefore slower. See the comments in `CMakeLists.txt`.
-
-### Run Tests
-
-```bash
 ctest --test-dir build/debug --output-on-failure
+
+# Demo
+./build/release/matching_engine
 ```
 
-63 GTest cases across five targets — `test_order_book` (14), `test_matching_engine`
-(21, covering the SPSC pipeline, `TradeRingBuffer` and the no-alloc order-book path),
-`test_spsc_ring_buffer` (10, including two concurrent producer/consumer tests),
-`test_memory_pool` (9) and `test_thread_placement` (9). All pass under both configurations.
+Debug builds always compile Abseil from source and enable an explicit list of UBSan checks;
+`CMakeLists.txt` explains why. `ctest` runs the 63 GoogleTest cases, the tests of the measurement
+scripts, the benchmarks' own consistency checks and the TSC calibration; all pass in both
+configurations.
 
-The same command runs the six tests of the measurement scripts, which need no
-build and no root, and three checks of the benchmark programs: the single-threaded
-benchmarks' own consistency checks and the TSC calibration. `ctest -L scripts`
-runs only the script tests, `ctest -LE scripts` everything else.
-
-### Known toolchain constraint
-
-Under GCC 15, UBSan's `null` and `function` sub-checks are incompatible with Abseil's
-SwissTable: both break constant-expression evaluation of a function-pointer comparison
-in `hash_policy_traits`, and `absl::flat_hash_map` fails to compile. The Debug
-configuration therefore enumerates the remaining UBSan checks explicitly rather than
-using `-fsanitize=undefined`; GCC does not support removing individual checks from that
-group. Null-pointer dereferences remain covered by ASan. Reproduced against both Abseil
-20260107 (Ubuntu package) and 20260817.0 (upstream), so this is not a packaging issue.
-
-### Run Benchmarks
+A study is recorded with the measurement scripts, which put the machine into a measurement mode
+(pinned frequency, SMT siblings offline, interrupts steered away) for the duration:
 
 ```bash
-# Once per machine: install the measurement-mode script. It prints the sudoers
-# rule that lets `setup` and `restore` run without a password.
-sudo scripts/env/install_bench_env.sh
-
-# Record a study, then print its tables. The recorder enters measurement mode
-# (pinned frequency, SMT siblings offline, device interrupts steered away),
-# launches every benchmark binary repeatedly, and leaves measurement mode.
+sudo scripts/env/install_bench_env.sh          # once per machine
 scripts/record/bench_record.py --label control
 scripts/report/bench_report.py docs/evidence/<cpu>/<study>
 ```
 
-A binary can also be started by hand for a quick look, for example
-`./build/release/bench_order_book`, but such a run is not evidence.
-[`docs/BENCHMARKING.md`](docs/BENCHMARKING.md) describes the workflow and what is
-checked for every launch; [`docs/evidence/`](docs/evidence/README.md) holds the
-recorded studies.
+[`docs/BENCHMARKING.md`](docs/BENCHMARKING.md) describes the workflow and the checks made for
+every launch.
 
 ---
 
 ## 6. Repository Layout
 
 ```
-Matching_Machine/
-├── include/
-│   ├── order.h               # Order struct: alignas(64), 64-byte cache-line fit
-│   ├── order_book.h          # OrderBook: PriceLevel + absl::flat_hash_map
-│   ├── spsc_ring_buffer.h    # Lock-free SPSC queue (acquire/release, false-sharing free)
-│   ├── memory_pool.h         # Free-list pool: O(1) alloc/dealloc, placement new
-│   ├── trade_ring_buffer.h   # Pre-allocated trade buffer (no heap alloc)
-│   ├── matching_engine.h     # SPSC dual-thread pipeline
-│   ├── feed_simulator.h      # Synthetic order feed (normal-dist price walk + cancel ratio)
-│   ├── latency_recorder.h    # RDTSC-based P50/P99/P999 recorder
-│   └── thread_placement.h    # Threads pinned to a CPU from their creation
-├── src/
-│   ├── order_book.cpp
-│   ├── matching_engine.cpp
-│   ├── feed_simulator.cpp
-│   └── main.cpp
-├── benchmarks/
-│   ├── bench_order_book.cpp       # OrderBook microbenchmarks, each on the v1 and the v3 book
-│   ├── bench_spsc_ring_buffer.cpp # Ring buffer microbenchmarks, with a mutex queue for comparison
-│   ├── bench_matching_engine.cpp  # SPSC pipeline throughput and latency, single-thread baseline
-│   ├── bench_baseline_mutex.cpp   # Mutex baseline pipeline (does not use the engine in src/)
-│   └── order_book_v1.h            # The order book from before the optimizations
-├── scripts/                       # Measurement tooling; each test sits next to its script
-│   ├── env/                       # Measurement mode: enter/leave, install, record the environment
-│   ├── record/                    # Record a study, or a matrix of diagnostic conditions
-│   ├── report/                    # Turn a recorded study into tables
-│   └── diagnostics/               # Tools that alter a launch for a diagnostic condition
-├── tests/
-│   ├── test_order_book.cpp
-│   ├── test_spsc_ring_buffer.cpp
-│   ├── test_memory_pool.cpp
-│   ├── test_matching_engine.cpp
-│   └── test_thread_placement.cpp
-├── docs/
-│   ├── AUDIT.md                   # Methodology audit of the benchmarks and its outcome
-│   ├── BENCHMARKING.md            # How measurements are made and checked
-│   └── evidence/                  # Recorded studies, including the control behind §4
-└── CMakeLists.txt
+include/, src/   The engine: order, order book, SPSC ring, memory pool, trade buffer, pipeline
+tests/           GoogleTest suites, run by ctest
+benchmarks/      Google Benchmark programs, with the v1 order book and the mutex pipeline baselines
+scripts/         Measurement tooling: env/ (measurement mode), record/, report/, diagnostics/
+docs/            AUDIT.md, BENCHMARKING.md, and evidence/ with the recording behind §4
 ```
 
+---
+
+## 7. Roadmap
+
+The long-term goal is to drive the engine with real order and market data instead of the
+synthetic feed, and to measure it on that flow.
+
+---
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
