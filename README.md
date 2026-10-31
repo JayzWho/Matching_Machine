@@ -44,10 +44,9 @@ Pipeline throughput is 100K orders divided by the wall-clock time of a run, thre
 included. Order book throughput is 1M generated orders divided by the time to replay them into
 an empty book. Matching latency, called service time in the full results, is the time the
 consumer thread spends on one order, from taking it out of the queue until matching is done; it
-is read with the TSC and converted with the TSC
-frequency calibrated during the recording, 2.419 GHz. Each benchmark program was launched 32
-times, and each value is the median of the launch medians; the pipeline speedup lies between
-2.18× and 2.52× in every launch.
+is read with the TSC and converted with the TSC frequency calibrated during the recording,
+2.419 GHz. Each benchmark program was launched 32 times, and each value is the median of the
+launch medians; the pipeline speedup lies between 2.18× and 2.52× in every launch.
 
 > **Machine**: Intel Core i5-1135G7, bare metal, cores held at the 2.4 GHz base frequency, turbo
 > off, SMT siblings offline; kernel 7.0.0-34-generic; GCC 15.2.0, Release (`-O2`).
