@@ -424,7 +424,9 @@ cmd_status() {
     printf "  perf_paranoid    : %s\n" "$(rd /proc/sys/kernel/perf_event_paranoid)"
     echo "  current MHz      :"
     for c in $(online_cpus); do
-        printf "      cpu%-2s %s MHz\n" "$c" "$(( $(rd "$CPU_DIR/cpu$c/cpufreq/scaling_cur_freq") / 1000 ))"
+        printf "      cpu%-2s %s MHz (cap %s)\n" "$c" \
+            "$(( $(rd "$CPU_DIR/cpu$c/cpufreq/scaling_cur_freq") / 1000 ))" \
+            "$(( $(rd "$CPU_DIR/cpu$c/cpufreq/scaling_max_freq") / 1000 ))"
     done
     echo "── measurement mode ─────────────────────────────────────────────────"
     if [ -f "$STATE_FILE" ]; then
@@ -703,7 +705,26 @@ cmd_restore() {
     # max before min, so an invalid intermediate range is never requested
     if [ -n "$R_MAX_PCT" ];  then echo "$R_MAX_PCT"  > "$PSTATE_DIR/max_perf_pct"; fi
     if [ -n "$R_MIN_PCT" ];  then echo "$R_MIN_PCT"  > "$PSTATE_DIR/min_perf_pct"; fi
+    # After the CPUs are back online: the kernel skips offline CPUs when no_turbo
+    # changes, so restoring it first would leave their cpuinfo_max_freq stale.
     if [ -n "$R_NO_TURBO" ]; then echo "$R_NO_TURBO" > "$PSTATE_DIR/no_turbo"; fi
+
+    # Bringing a CPU back online overwrites its scaling_max_freq request with the
+    # limit it had when it went offline (cpufreq_policy_online() in the kernel).
+    # setup offlines the siblings after turbo is off, so they return capped at
+    # the base frequency, and restoring no_turbo does not lift that cap: they
+    # would stay slower than their cores' first threads until reboot. Reset the
+    # request to the kernel's "no limit" default, the value it has at boot.
+    echo "[*] resetting the frequency cap of re-onlined CPUs"
+    local cap hw
+    for c in "${R_OFFLINED[@]}"; do
+        [ -e "$CPU_DIR/cpu$c/cpufreq/scaling_max_freq" ] || continue
+        echo 2147483647 > "$CPU_DIR/cpu$c/cpufreq/scaling_max_freq" 2>/dev/null \
+            || warn "could not reset scaling_max_freq of cpu$c"
+        cap="$(rd "$CPU_DIR/cpu$c/cpufreq/scaling_max_freq")"
+        hw="$(rd "$CPU_DIR/cpu$c/cpufreq/cpuinfo_max_freq")"
+        [ "$cap" = "$hw" ] || warn "cpu$c is still capped at $cap kHz (hardware maximum $hw kHz)"
+    done
 
     echo "[*] restoring governors"
     local pair g
